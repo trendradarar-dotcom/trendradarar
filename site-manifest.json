@@ -2,7 +2,12 @@
   "schema": "TRENDHUNTER_M25_ARABIC_STATIC_PUBLIC_EXPORT_V1",
   "base_url": "https://trendradar.com.co",
   "language": "ar",
-  "channels": ["youtube","tiktok","instagram","snapchat"],
+  "channels": [
+    "youtube",
+    "tiktok",
+    "instagram",
+    "snapchat"
+  ],
   "public_data_embedded": false,
   "provider_publication_proof_embedded": false,
   "private_test_content_embedded": false,
@@ -25,5 +30,19 @@
       "no_paid_promotion_by_default": true
     }
   },
-  "files": ["404.html","_headers","archive/ar/instagram/index.html","archive/ar/snapchat/index.html","archive/ar/tiktok/index.html","archive/ar/youtube/index.html","index.html","radar/ar/instagram/index.html","radar/ar/snapchat/index.html","radar/ar/tiktok/index.html","radar/ar/youtube/index.html","robots.txt","sitemap.xml"]
+  "files": [
+    "404.html",
+    "_headers",
+    "archive/ar/instagram/index.html",
+    "archive/ar/snapchat/index.html",
+    "archive/ar/tiktok/index.html",
+    "archive/ar/youtube/index.html",
+    "index.html",
+    "radar/ar/instagram/index.html",
+    "radar/ar/snapchat/index.html",
+    "radar/ar/tiktok/index.html",
+    "radar/ar/youtube/index.html",
+    "robots.txt",
+    "sitemap.xml"
+  ]
 }
