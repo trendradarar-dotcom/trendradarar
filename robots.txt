@@ -1,0 +1,14 @@
+User-agent: *
+Allow: /radar/ar/
+Allow: /archive/ar/
+Disallow: /radar/en/
+Disallow: /radar/fr/
+Disallow: /radar/hi/
+Disallow: /radar/zh-Hans/
+Disallow: /radar/es/
+Disallow: /archive/en/
+Disallow: /archive/fr/
+Disallow: /archive/hi/
+Disallow: /archive/zh-Hans/
+Disallow: /archive/es/
+Sitemap: https://trendradar.com.co/sitemap.xml
