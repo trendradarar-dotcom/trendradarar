@@ -1,0 +1,29 @@
+{
+  "schema": "TRENDHUNTER_M25_ARABIC_STATIC_PUBLIC_EXPORT_V1",
+  "base_url": "https://trendradar.com.co",
+  "language": "ar",
+  "channels": ["youtube","tiktok","instagram","snapchat"],
+  "public_data_embedded": false,
+  "provider_publication_proof_embedded": false,
+  "private_test_content_embedded": false,
+  "deferred_languages_exported": false,
+  "public_distribution_performed": false,
+  "search_console_submission_performed": false,
+  "deployment_contract": {
+    "schema": "TRENDHUNTER_M25_PUBLIC_DOMAIN_DEPLOYMENT_CONTRACT_V1",
+    "domain": "trendradar.com.co",
+    "canonical_base_url": "https://trendradar.com.co",
+    "activation_language": "ar",
+    "deployment_shape": "STATIC_PUBLIC_EDGE_SITE_PLUS_PRIVATE_GOVERNANCE_ENGINE",
+    "public_indexing_authorized": false,
+    "public_distribution_authorized": false,
+    "paid_promotion_authorized": false,
+    "guards": {
+      "owner_governance_engine_not_exposed_by_static_public_site": true,
+      "deferred_languages_not_exported": true,
+      "one_public_creative_one_audience_language": true,
+      "no_paid_promotion_by_default": true
+    }
+  },
+  "files": ["404.html","_headers","archive/ar/instagram/index.html","archive/ar/snapchat/index.html","archive/ar/tiktok/index.html","archive/ar/youtube/index.html","index.html","radar/ar/instagram/index.html","radar/ar/snapchat/index.html","radar/ar/tiktok/index.html","radar/ar/youtube/index.html","robots.txt","sitemap.xml"]
+}
