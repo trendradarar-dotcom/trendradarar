@@ -22,6 +22,9 @@ def cfg(name):
 def configured():
     return all((cfg("TIKTOK_CLIENT_KEY"),cfg("TIKTOK_CLIENT_SECRET"),cfg("TIKTOK_REDIRECT_URI")))
 
+def audit_approved():
+    return cfg("TIKTOK_AUDIT_APPROVED").lower() in ("1","true","yes","on")
+
 def fingerprint(v):
     return hashlib.sha256(v.encode()).hexdigest() if v else ""
 
@@ -170,7 +173,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_html(200,page("Trend Radar · Share to TikTok",body))
 
         if p.path=="/health":
-            return self.js(200,{"ok":True,"configured":configured(),"ui":"creator_facing_v2"})
+            return self.js(200,{"ok":True,"configured":configured(),"ui":"creator_facing_v2","audit_approved":audit_approved()})
 
         if p.path=="/auth/tiktok/start":
             return self.start_auth()
@@ -278,7 +281,20 @@ class Handler(BaseHTTPRequestHandler):
         username=html.escape(str(data.get("creator_username") or ""))
         avatar=html.escape(str(data.get("creator_avatar_url") or ""))
         privacy=list(data.get("privacy_level_options") or [])
-        privacy_options="<option value=''>اختر الخصوصية يدويًا</option>"+"".join(f"<option value='{html.escape(str(x))}'>{html.escape(str(x))}</option>" for x in privacy)
+        approved=audit_approved()
+        account_private=("PUBLIC_TO_EVERYONE" not in privacy and "FOLLOWER_OF_CREATOR" in privacy)
+        option_rows=[]
+        for x in privacy:
+            disabled=(not approved and x!="SELF_ONLY")
+            suffix=" — متاح بعد اعتماد TikTok" if disabled else ""
+            option_rows.append(f"<option value='{html.escape(str(x))}' {'disabled' if disabled else ''}>{html.escape(str(x))+suffix}</option>")
+        privacy_options="<option value=''>اختر الخصوصية يدويًا</option>"+"".join(option_rows)
+        if approved:
+            audit_notice=""
+        elif account_private:
+            audit_notice="<p class='muted'>وضع ما قبل التدقيق: الاختبار مسموح فقط بخصوصية SELF_ONLY حتى اعتماد TikTok.</p>"
+        else:
+            audit_notice="<p class='danger'><strong>يلزم جعل حساب TikTok خاصًا (Private) قبل اختبار Direct Post في وضع ما قبل التدقيق.</strong> لن نرسل أي محاولة نشر حتى يصبح الحساب خاصًا.</p>"
         comment_disabled=bool(data.get("comment_disabled"))
         duet_disabled=bool(data.get("duet_disabled"))
         stitch_disabled=bool(data.get("stitch_disabled"))
@@ -286,7 +302,7 @@ class Handler(BaseHTTPRequestHandler):
         avatar_html=f"<img src='{avatar}' alt='' style='width:64px;height:64px;border-radius:50%;object-fit:cover'>" if avatar else ""
         body=f"""<div class="card"><h1>النشر إلى TikTok</h1>
 <div style="display:flex;gap:14px;align-items:center">{avatar_html}<div><strong>{nickname}</strong><br><small>@{username}</small></div></div>
-<p>الحد الأقصى لهذا الحساب: <strong>{max_sec} ثانية</strong>.</p></div>
+<p>الحد الأقصى لهذا الحساب: <strong>{max_sec} ثانية</strong>.</p>{audit_notice}</div>
 <div class="card">
 <label>الفيديو الأصلي من جهازك</label><input id="videoFile" type="file" accept="video/mp4" required>
 <video id="preview" controls hidden></video>
@@ -304,13 +320,13 @@ class Handler(BaseHTTPRequestHandler):
 <p class="muted">قد تستغرق المعالجة عدة دقائق قبل ظهور النتيجة على ملفك.</p>
 <div id="status" class="status" hidden></div></div>"""
         script=f"""<script>
-const maxSec={max_sec}; const csrf={json.dumps(sess.get("csrf",""))};
+const maxSec={max_sec}; const csrf={json.dumps(sess.get("csrf",""))}; const preAuditBlocked={str((not approved and not account_private)).lower()};
 const f=document.getElementById('videoFile'), p=document.getElementById('preview'), btn=document.getElementById('publish');
 const privacy=document.getElementById('privacy'), consent=document.getElementById('consent'), commercial=document.getElementById('commercial');
 let duration=0;
 function ready(){{
  document.getElementById('commercialNote').hidden=!commercial.checked;
- btn.disabled=!(f.files.length&&privacy.value&&consent.checked&&!commercial.checked&&duration>0&&duration<=maxSec);
+ btn.disabled=preAuditBlocked || !(f.files.length&&privacy.value&&consent.checked&&!commercial.checked&&duration>0&&duration<=maxSec);
 }}
 [f,privacy,consent,commercial].forEach(x=>x.addEventListener('change',ready));
 f.addEventListener('change',()=>{{duration=0; if(!f.files.length) return ready(); const u=URL.createObjectURL(f.files[0]); p.src=u;p.hidden=false;p.onloadedmetadata=()=>{{duration=p.duration;ready();}};}});
@@ -373,7 +389,13 @@ async function poll(id,s){{
         if not ok:
             return self.js(502,{"error":"creator_info_failed","provider_code":err.get("code"),"http_status":status})
         options=list(creator.get("privacy_level_options") or [])
+        approved=audit_approved()
+        account_private=("PUBLIC_TO_EVERYONE" not in options and "FOLLOWER_OF_CREATOR" in options)
         max_sec=int(creator.get("max_video_post_duration_sec") or 0)
+        if not approved and not account_private:
+            return self.js(400,{"error":"unaudited_private_account_required"})
+        if not approved and privacy!="SELF_ONLY":
+            return self.js(400,{"error":"unaudited_self_only_required"})
         if privacy not in options:
             return self.js(400,{"error":"privacy_not_allowed","allowed":options})
         if duration<=0 or (max_sec and duration>max_sec):
@@ -425,7 +447,7 @@ async function poll(id,s){{
             return self.js(502,{"error":"binary_upload_failed","http_status":upload_status})
         with _LOCK:
             sess["last_publish_id"]=publish_id; sess["updated_at"]=int(time.time())
-        return self.js(201,{"ok":True,"publish_id":publish_id,"privacy_requested":privacy,"public_client_approved":False})
+        return self.js(201,{"ok":True,"publish_id":publish_id,"privacy_requested":privacy,"public_client_approved":approved})
 
     def status_api(self,q):
         sid,sess=self.get_session()
