@@ -59,6 +59,29 @@ def query_creator(token):
     ok=(status==200 and err.get("code")=="ok")
     return ok,status,data,err
 
+def mp4_duration_seconds(blob):
+    i=blob.find(b"mvhd")
+    if i<0 or i+8>=len(blob):
+        return 0.0
+    p=i+4
+    version=blob[p]
+    try:
+        if version==0:
+            if p+20>len(blob): return 0.0
+            timescale=int.from_bytes(blob[p+12:p+16],"big")
+            duration=int.from_bytes(blob[p+16:p+20],"big")
+        elif version==1:
+            if p+32>len(blob): return 0.0
+            timescale=int.from_bytes(blob[p+20:p+24],"big")
+            duration=int.from_bytes(blob[p+24:p+32],"big")
+        else:
+            return 0.0
+        if timescale<=0 or duration<=0:
+            return 0.0
+        return duration/timescale
+    except Exception:
+        return 0.0
+
 def clean_stores():
     now=int(time.time())
     with _LOCK:
@@ -326,7 +349,7 @@ const privacy=document.getElementById('privacy'), consent=document.getElementByI
 let duration=0;
 function ready(){{
  document.getElementById('commercialNote').hidden=!commercial.checked;
- btn.disabled=preAuditBlocked || !(f.files.length&&privacy.value&&consent.checked&&!commercial.checked&&duration>0&&duration<=maxSec);
+ btn.disabled=preAuditBlocked || !(f.files.length&&privacy.value&&consent.checked&&!commercial.checked);
 }}
 [f,privacy,consent,commercial].forEach(x=>x.addEventListener('change',ready));
 f.addEventListener('change',()=>{{duration=0; if(!f.files.length) return ready(); const u=URL.createObjectURL(f.files[0]); p.src=u;p.hidden=false;p.onloadedmetadata=()=>{{duration=p.duration;ready();}};}});
@@ -377,14 +400,16 @@ async function poll(id,s){{
         ctype=self.headers.get("Content-Type","")
         if ctype!="video/mp4":
             return self.js(400,{"error":"mp4_required"})
-        try: duration=float(q.get("duration_sec",["0"])[0])
-        except Exception: duration=0
         title=q.get("title",[""])[0][:2200]
         privacy=q.get("privacy",[""])[0]
         allow_comment=q.get("allow_comment",["false"])[0]=="true"
         allow_duet=q.get("allow_duet",["false"])[0]=="true"
         allow_stitch=q.get("allow_stitch",["false"])[0]=="true"
 
+        video=self.rfile.read(length)
+        duration=mp4_duration_seconds(video)
+        if duration<=0:
+            return self.js(400,{"error":"invalid_mp4_or_duration_unreadable"})
         ok,status,creator,err=query_creator(sess["access_token"])
         if not ok:
             return self.js(502,{"error":"creator_info_failed","provider_code":err.get("code"),"http_status":status})
@@ -430,7 +455,6 @@ async function poll(id,s){{
         if not upload_url or not publish_id:
             return self.js(502,{"error":"missing_upload_target"})
 
-        video=self.rfile.read(length)
         req=urllib.request.Request(
             upload_url,data=video,
             headers={"Content-Type":"video/mp4","Content-Length":str(length),"Content-Range":f"bytes 0-{length-1}/{length}"},
