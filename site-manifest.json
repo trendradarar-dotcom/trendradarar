@@ -14,6 +14,7 @@
   "deferred_languages_exported": false,
   "public_distribution_performed": false,
   "search_console_submission_performed": false,
+  "oauth_public_branding_pages_present": true,
   "deployment_contract": {
     "schema": "TRENDHUNTER_M25_PUBLIC_DOMAIN_DEPLOYMENT_CONTRACT_V1",
     "domain": "trendradar.com.co",
@@ -38,11 +39,14 @@
     "archive/ar/tiktok/index.html",
     "archive/ar/youtube/index.html",
     "index.html",
+    "privacy.html",
     "radar/ar/instagram/index.html",
     "radar/ar/snapchat/index.html",
     "radar/ar/tiktok/index.html",
     "radar/ar/youtube/index.html",
     "robots.txt",
-    "sitemap.xml"
+    "sitemap.txt",
+    "sitemap.xml",
+    "terms.html"
   ]
 }
