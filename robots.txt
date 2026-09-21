@@ -11,4 +11,4 @@ Disallow: /archive/fr/
 Disallow: /archive/hi/
 Disallow: /archive/zh-Hans/
 Disallow: /archive/es/
-Sitemap: https://trendradar.com.co/sitemap.xml
+Sitemap: https://trendradar.com.co/sitemap.txt
