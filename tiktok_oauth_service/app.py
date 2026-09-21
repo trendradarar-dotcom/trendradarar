@@ -1,18 +1,20 @@
-import base64, hashlib, json, os, secrets, threading, time, urllib.error, urllib.parse, urllib.request
+import hashlib, html, json, os, secrets, threading, time, urllib.error, urllib.parse, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
+from http.cookies import SimpleCookie
 
 AUTH_URL="https://www.tiktok.com/v2/auth/authorize/"
 TOKEN_URL="https://open.tiktokapis.com/v2/oauth/token/"
 CREATOR_INFO_URL="https://open.tiktokapis.com/v2/post/publish/creator_info/query/"
-UPLOAD_INIT_URL="https://open.tiktokapis.com/v2/post/publish/inbox/video/init/"
+DIRECT_POST_INIT_URL="https://open.tiktokapis.com/v2/post/publish/video/init/"
+STATUS_URL="https://open.tiktokapis.com/v2/post/publish/status/fetch/"
 DEFAULT_SCOPES="user.info.basic,video.upload,video.publish"
-TTL=600
+STATE_TTL=600
+SESSION_TTL=86400
+MAX_UPLOAD_BYTES=100*1024*1024
+
 _STATES={}
-_TOKENS={}
-_LAST_TEST={}
+_SESSIONS={}
 _LOCK=threading.Lock()
-DEMO_B64_PATH=Path(__file__).with_name("demo_video.b64")
 
 def cfg(name):
     return str(os.environ.get(name,"")).strip()
@@ -23,7 +25,7 @@ def configured():
 def fingerprint(v):
     return hashlib.sha256(v.encode()).hexdigest() if v else ""
 
-def api_json_post(url, token, payload=None, timeout=20):
+def api_json_post(url, token, payload=None, timeout=25):
     body=json.dumps(payload or {}).encode("utf-8")
     req=urllib.request.Request(
         url,
@@ -36,91 +38,67 @@ def api_json_post(url, token, payload=None, timeout=20):
     )
     try:
         with urllib.request.urlopen(req,timeout=timeout) as r:
-            raw=r.read()
-            status=r.status
+            raw=r.read(); status=r.status
     except urllib.error.HTTPError as e:
-        raw=e.read()
-        status=e.code
+        raw=e.read(); status=e.code
+    except Exception:
+        return 0,{"error":{"code":"network_error","message":"TikTok API unreachable"}}
     try:
         parsed=json.loads(raw.decode("utf-8")) if raw else {}
     except Exception:
-        parsed={"raw_unparsed":True}
-    return status, parsed
+        parsed={"error":{"code":"invalid_json","message":"Invalid TikTok response"}}
+    return status,parsed
 
-def load_demo_video():
-    raw=DEMO_B64_PATH.read_text(encoding="utf-8").strip()
-    return base64.b64decode(raw)
+def query_creator(token):
+    status,payload=api_json_post(CREATOR_INFO_URL,token,{})
+    err=(payload.get("error") or {}) if isinstance(payload,dict) else {}
+    data=(payload.get("data") or {}) if isinstance(payload,dict) else {}
+    ok=(status==200 and err.get("code")=="ok")
+    return ok,status,data,err
 
-def run_private_draft_test(access_token):
-    result={"creator_info_ok":False,"draft_upload_initialized":False,"draft_binary_uploaded":False}
-    status,creator=api_json_post(CREATOR_INFO_URL,access_token,{})
-    result["creator_info_http_status"]=status
-    err=(creator.get("error") or {}) if isinstance(creator,dict) else {}
-    data=(creator.get("data") or {}) if isinstance(creator,dict) else {}
-    if status==200 and err.get("code")=="ok":
-        result["creator_info_ok"]=True
-        result["creator_username"]=str(data.get("creator_username") or "")
-        result["creator_nickname"]=str(data.get("creator_nickname") or "")
-        result["privacy_level_options"]=list(data.get("privacy_level_options") or [])
-        result["max_video_post_duration_sec"]=data.get("max_video_post_duration_sec")
-    else:
-        result["creator_info_error_code"]=str(err.get("code") or f"http_{status}")
-        return result
+def clean_stores():
+    now=int(time.time())
+    with _LOCK:
+        for k,v in list(_STATES.items()):
+            if now-int(v.get("ts",0))>STATE_TTL:
+                _STATES.pop(k,None)
+        for sid,v in list(_SESSIONS.items()):
+            if now-int(v.get("updated_at",0))>SESSION_TTL:
+                _SESSIONS.pop(sid,None)
 
-    video=load_demo_video()
-    size=len(video)
-    init_payload={
-        "source_info":{
-            "source":"FILE_UPLOAD",
-            "video_size":size,
-            "chunk_size":size,
-            "total_chunk_count":1,
-        }
-    }
-    status,init=api_json_post(UPLOAD_INIT_URL,access_token,init_payload)
-    result["draft_init_http_status"]=status
-    err=(init.get("error") or {}) if isinstance(init,dict) else {}
-    data=(init.get("data") or {}) if isinstance(init,dict) else {}
-    if not (status==200 and err.get("code")=="ok"):
-        result["draft_init_error_code"]=str(err.get("code") or f"http_{status}")
-        return result
-
-    upload_url=str(data.get("upload_url") or "")
-    publish_id=str(data.get("publish_id") or "")
-    if not upload_url or not publish_id:
-        result["draft_init_error_code"]="missing_upload_url_or_publish_id"
-        return result
-    result["draft_upload_initialized"]=True
-    result["publish_id"]=publish_id
-
-    req=urllib.request.Request(
-        upload_url,
-        data=video,
-        headers={
-            "Content-Type":"video/mp4",
-            "Content-Length":str(size),
-            "Content-Range":f"bytes 0-{size-1}/{size}",
-        },
-        method="PUT",
-    )
-    try:
-        with urllib.request.urlopen(req,timeout=30) as r:
-            upload_status=r.status
-            r.read()
-    except urllib.error.HTTPError as e:
-        upload_status=e.code
-        e.read()
-    except Exception:
-        result["draft_upload_error_code"]="upload_unreachable"
-        return result
-    result["draft_upload_http_status"]=upload_status
-    result["draft_binary_uploaded"]=200 <= upload_status < 300
-    if not result["draft_binary_uploaded"]:
-        result["draft_upload_error_code"]=f"http_{upload_status}"
-    return result
+def page(title,body,extra_script=""):
+    return f"""<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{html.escape(title)}</title>
+<style>
+:root{{--bg:#0b0e12;--card:#151a21;--txt:#f5f7fa;--muted:#a9b0bb;--accent:#ff2d55;--line:#2a313b;--ok:#28c76f}}
+*{{box-sizing:border-box}} body{{margin:0;background:var(--bg);color:var(--txt);font-family:Arial,Tahoma,sans-serif;line-height:1.55}}
+.wrap{{max-width:880px;margin:auto;padding:28px 18px 60px}} .brand{{display:flex;gap:14px;align-items:center;margin-bottom:24px}}
+.logo{{width:48px;height:48px;border-radius:14px;background:linear-gradient(135deg,#25f4ee,#111,#fe2c55);display:grid;place-items:center;font-weight:800}}
+.card{{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:22px;margin:16px 0}}
+h1,h2{{margin:0 0 12px}} p{{margin:8px 0;color:var(--muted)}} a{{color:#74d9ff}}
+button,.btn{{display:inline-block;border:0;border-radius:12px;padding:13px 20px;background:var(--accent);color:white;font-weight:700;text-decoration:none;cursor:pointer}}
+button[disabled]{{opacity:.5;cursor:not-allowed}} label{{display:block;margin:14px 0 6px;font-weight:700}}
+input[type=text],select,input[type=file]{{width:100%;background:#0f1318;color:var(--txt);border:1px solid var(--line);border-radius:10px;padding:12px}}
+.row{{display:grid;grid-template-columns:1fr 1fr;gap:14px}} .check{{display:flex;gap:10px;align-items:center;margin:10px 0;font-weight:400}}
+small,.muted{{color:var(--muted)}} video{{width:100%;max-height:420px;background:#000;border-radius:12px;margin-top:12px}}
+.status{{padding:12px;border-radius:10px;background:#0f1318;border:1px solid var(--line);white-space:pre-wrap;direction:ltr;text-align:left}}
+.ok{{color:var(--ok)}} .danger{{color:#ff6b6b}} footer{{margin-top:30px;color:var(--muted);font-size:14px}}
+@media(max-width:650px){{.row{{grid-template-columns:1fr}}}}
+</style>
+</head><body><div class="wrap">
+<div class="brand"><div class="logo">TR</div><div><strong>رادار الترند — Trend Radar</strong><br><small>اكتشف ما يصعد الآن في بلدك والعالم</small></div></div>
+{body}
+<footer>
+<a href="https://trendradar.com.co/privacy.html">سياسة الخصوصية</a> ·
+<a href="https://trendradar.com.co/terms.html">شروط الاستخدام</a>
+<br>تكامل TikTok يستخدم Login Kit وContent Posting API لمشاركة المحتوى الأصلي بموافقة المستخدم.
+</footer></div>{extra_script}</body></html>"""
 
 class Handler(BaseHTTPRequestHandler):
-    server_version="TrendRadarTikTokOAuth/1.1"
+    server_version="TrendRadarTikTokShare/2.0"
 
     def log_message(self,fmt,*args):
         path=urllib.parse.urlsplit(self.path).path
@@ -131,55 +109,110 @@ class Handler(BaseHTTPRequestHandler):
             "Cache-Control":"no-store","Pragma":"no-cache",
             "X-Content-Type-Options":"nosniff","X-Frame-Options":"DENY",
             "Referrer-Policy":"no-referrer",
-            "Content-Security-Policy":"default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+            "Permissions-Policy":"camera=(),microphone=(),geolocation=()",
+            "Content-Security-Policy":"default-src 'self'; img-src 'self' data: https:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'"
         }.items(): self.send_header(k,v)
         super().end_headers()
 
-    def js(self,status,payload):
-        body=json.dumps(payload,separators=(",",":"),ensure_ascii=False).encode("utf-8")
+    def send_bytes(self,status,body,ctype="text/html; charset=utf-8",headers=None):
         self.send_response(status)
-        self.send_header("Content-Type","application/json; charset=utf-8")
+        self.send_header("Content-Type",ctype)
         self.send_header("Content-Length",str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        for k,v in (headers or {}).items():
+            self.send_header(k,v)
+        self.end_headers(); self.wfile.write(body)
 
-    def redir(self,url):
-        self.send_response(302); self.send_header("Location",url)
-        self.send_header("Content-Length","0"); self.end_headers()
+    def send_html(self,status,text,headers=None):
+        self.send_bytes(status,text.encode("utf-8"),headers=headers)
+
+    def js(self,status,payload,headers=None):
+        body=json.dumps(payload,separators=(",",":"),ensure_ascii=False).encode("utf-8")
+        self.send_bytes(status,body,"application/json; charset=utf-8",headers)
+
+    def cookie_sid(self):
+        raw=self.headers.get("Cookie","")
+        c=SimpleCookie()
+        try: c.load(raw)
+        except Exception: return ""
+        morsel=c.get("trsid")
+        return morsel.value if morsel else ""
+
+    def get_session(self):
+        sid=self.cookie_sid()
+        if not sid: return "",None
+        with _LOCK:
+            sess=_SESSIONS.get(sid)
+            if sess: sess["updated_at"]=int(time.time())
+        return sid,sess
+
+    def set_cookie_header(self,sid):
+        return {"Set-Cookie":f"trsid={sid}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age={SESSION_TTL}"}
+
+    def redirect(self,url,headers=None):
+        self.send_response(302)
+        self.send_header("Location",url)
+        self.send_header("Content-Length","0")
+        for k,v in (headers or {}).items(): self.send_header(k,v)
+        self.end_headers()
 
     def do_GET(self):
+        clean_stores()
         p=urllib.parse.urlsplit(self.path)
         q=urllib.parse.parse_qs(p.query,keep_blank_values=True)
+
         if p.path=="/":
-            return self.js(200,{"service":"Trend Radar TikTok OAuth","status":"ready" if configured() else "configuration_required","publication_authority":False})
+            body="""<div class="card"><h1>شارك فيديوك الأصلي على TikTok</h1>
+<p>اربط حساب TikTok، راجع الحساب المستهدف وخيارات الخصوصية، عاين الفيديو، ثم أرسل فقط بعد موافقتك الصريحة.</p>
+<p>لا نضيف شعارًا أو علامة مائية إلى الفيديو، ولا نرسل أي ملف قبل ضغطك زر النشر.</p>
+<a class="btn" href="/auth/tiktok/start">ربط حساب TikTok</a></div>
+<div class="card"><h2>كيف يعمل؟</h2>
+<p>1) تسجيل الدخول الآمن عبر TikTok. 2) جلب إعدادات حسابك الحالية. 3) اختيار فيديو من جهازك. 4) اختيار الخصوصية والتفاعلات. 5) موافقة صريحة ثم إرسال ومتابعة الحالة.</p></div>"""
+            return self.send_html(200,page("Trend Radar · Share to TikTok",body))
+
         if p.path=="/health":
-            return self.js(200,{"ok":True,"configured":configured()})
+            return self.js(200,{"ok":True,"configured":configured(),"ui":"creator_facing_v2"})
+
         if p.path=="/auth/tiktok/start":
-            return self.start()
+            return self.start_auth()
+
         if p.path=="/auth/tiktok/callback":
             return self.callback(q)
+
+        if p.path=="/share":
+            return self.share_page()
+
+        if p.path=="/api/status":
+            return self.status_api(q)
+
         if p.path=="/auth/tiktok/status":
-            with _LOCK:
-                t=dict(_TOKENS.get("owner") or {})
-                test=dict(_LAST_TEST)
+            sid,sess=self.get_session()
             return self.js(200,{
                 "configured":configured(),
-                "authorized":bool(t),
-                "scope":t.get("scope",""),
+                "authorized":bool(sess and sess.get("access_token")),
+                "scope":(sess or {}).get("scope",""),
                 "publication_authority":False,
                 "token_plaintext_exposed":False,
-                "private_test":test,
             })
         return self.js(404,{"error":"not_found"})
 
-    def start(self):
-        if not configured(): return self.js(503,{"error":"service_not_configured"})
+    def do_POST(self):
+        p=urllib.parse.urlsplit(self.path)
+        if p.path=="/api/post":
+            return self.post_video(p)
+        return self.js(404,{"error":"not_found"})
+
+    def start_auth(self):
+        if not configured():
+            return self.send_html(503,page("Configuration required","<div class='card'><h1>الخدمة غير مهيأة</h1></div>"))
+        sid=self.cookie_sid() or secrets.token_urlsafe(24)
+        csrf=secrets.token_urlsafe(24)
         now=int(time.time())
         with _LOCK:
-            for s,ts in list(_STATES.items()):
-                if now-ts>TTL: _STATES.pop(s,None)
+            sess=_SESSIONS.get(sid) or {}
+            sess.update({"csrf":csrf,"updated_at":now})
+            _SESSIONS[sid]=sess
             state=secrets.token_urlsafe(32)
-            _STATES[state]=now
+            _STATES[state]={"sid":sid,"ts":now}
         params={
             "client_key":cfg("TIKTOK_CLIENT_KEY"),
             "response_type":"code",
@@ -188,21 +221,19 @@ class Handler(BaseHTTPRequestHandler):
             "state":state,
             "disable_auto_auth":"1",
         }
-        return self.redir(AUTH_URL+"?"+urllib.parse.urlencode(params))
+        return self.redirect(AUTH_URL+"?"+urllib.parse.urlencode(params),self.set_cookie_header(sid))
 
     def callback(self,q):
-        if not configured(): return self.js(503,{"error":"service_not_configured"})
         if q.get("error"):
-            return self.js(400,{"error":"authorization_denied_or_failed","provider_error":q.get("error",[""])[0]})
-        state=q.get("state",[""])[0]
-        code=q.get("code",[""])[0]
-        now=int(time.time())
+            return self.send_html(400,page("Authorization failed","<div class='card'><h1>تعذر التفويض</h1><p>ألغى المستخدم العملية أو رفض TikTok الطلب.</p></div>"))
+        state=q.get("state",[""])[0]; code=q.get("code",[""])[0]; now=int(time.time())
         with _LOCK:
-            started=_STATES.pop(state,0) if state else 0
-        if not state or not started: return self.js(400,{"error":"oauth_state_mismatch"})
-        if now-int(started)>TTL: return self.js(400,{"error":"oauth_state_expired"})
-        if not code: return self.js(400,{"error":"authorization_code_missing"})
-
+            item=_STATES.pop(state,None) if state else None
+        if not item or now-int(item.get("ts",0))>STATE_TTL:
+            return self.send_html(400,page("Invalid state","<div class='card'><h1>جلسة التفويض غير صالحة</h1><a class='btn' href='/auth/tiktok/start'>ابدأ من جديد</a></div>"))
+        sid=item["sid"]
+        if not code:
+            return self.send_html(400,page("Missing code","<div class='card'><h1>لم يصل رمز التفويض</h1></div>"))
         data=urllib.parse.urlencode({
             "client_key":cfg("TIKTOK_CLIENT_KEY"),
             "client_secret":cfg("TIKTOK_CLIENT_SECRET"),
@@ -210,59 +241,201 @@ class Handler(BaseHTTPRequestHandler):
             "grant_type":"authorization_code",
             "redirect_uri":cfg("TIKTOK_REDIRECT_URI"),
         }).encode()
-        req=urllib.request.Request(
-            TOKEN_URL,
-            data=data,
-            headers={"Content-Type":"application/x-www-form-urlencoded"},
-            method="POST",
-        )
+        req=urllib.request.Request(TOKEN_URL,data=data,headers={"Content-Type":"application/x-www-form-urlencoded"},method="POST")
         try:
             with urllib.request.urlopen(req,timeout=20) as r:
-                status=r.status
-                raw=r.read()
-        except urllib.error.HTTPError as e:
-            return self.js(502,{"error":"token_exchange_failed","status":e.code})
+                payload=json.loads(r.read().decode("utf-8"))
         except Exception:
-            return self.js(502,{"error":"token_exchange_unreachable"})
-        if status!=200:
-            return self.js(502,{"error":"token_exchange_failed","status":status})
-        try:
-            payload=json.loads(raw.decode())
-        except Exception:
-            return self.js(502,{"error":"token_exchange_invalid_json"})
-
-        a=str(payload.get("access_token","")).strip()
-        r=str(payload.get("refresh_token","")).strip()
-        oid=str(payload.get("open_id","")).strip()
+            return self.send_html(502,page("Token exchange failed","<div class='card'><h1>تعذر إكمال تسجيل الدخول</h1></div>"))
+        access=str(payload.get("access_token","")).strip()
+        refresh=str(payload.get("refresh_token","")).strip()
+        open_id=str(payload.get("open_id","")).strip()
         scope=str(payload.get("scope","")).strip()
         exp=int(payload.get("expires_in",0) or 0)
-        if not a or not r or not oid or exp<=0:
-            return self.js(502,{"error":"token_exchange_incomplete"})
-
+        if not access or not refresh or not open_id or exp<=0:
+            return self.send_html(502,page("Incomplete token","<div class='card'><h1>استجابة TikTok غير مكتملة</h1></div>"))
         with _LOCK:
-            _TOKENS["owner"]={
-                "access_token":a,
-                "refresh_token":r,
-                "open_id":oid,
-                "scope":scope,
-                "expires_at":now+exp,
-                "access_token_sha256":fingerprint(a),
-                "refresh_token_sha256":fingerprint(r),
-            }
+            sess=_SESSIONS.get(sid) or {"csrf":secrets.token_urlsafe(24)}
+            sess.update({
+                "access_token":access,"refresh_token":refresh,"open_id":open_id,
+                "scope":scope,"expires_at":now+exp,"updated_at":now,
+                "access_token_sha256":fingerprint(access),"refresh_token_sha256":fingerprint(refresh),
+            })
+            _SESSIONS[sid]=sess
+        return self.redirect("/share",self.set_cookie_header(sid))
 
-        private_test=run_private_draft_test(a)
+    def share_page(self):
+        sid,sess=self.get_session()
+        if not sess or not sess.get("access_token"):
+            return self.redirect("/auth/tiktok/start")
+        ok,status,data,err=query_creator(sess["access_token"])
+        if not ok:
+            code=html.escape(str(err.get("code") or status))
+            return self.send_html(502,page("Creator info failed",f"<div class='card'><h1>تعذر قراءة إعدادات TikTok</h1><p class='danger'>{code}</p></div>"))
         with _LOCK:
-            _LAST_TEST.clear()
-            _LAST_TEST.update(private_test)
+            sess["creator_info"]=data; sess["updated_at"]=int(time.time())
+        nickname=html.escape(str(data.get("creator_nickname") or data.get("creator_username") or "TikTok creator"))
+        username=html.escape(str(data.get("creator_username") or ""))
+        avatar=html.escape(str(data.get("creator_avatar_url") or ""))
+        privacy=list(data.get("privacy_level_options") or [])
+        privacy_options="<option value=''>اختر الخصوصية يدويًا</option>"+"".join(f"<option value='{html.escape(str(x))}'>{html.escape(str(x))}</option>" for x in privacy)
+        comment_disabled=bool(data.get("comment_disabled"))
+        duet_disabled=bool(data.get("duet_disabled"))
+        stitch_disabled=bool(data.get("stitch_disabled"))
+        max_sec=int(data.get("max_video_post_duration_sec") or 0)
+        avatar_html=f"<img src='{avatar}' alt='' style='width:64px;height:64px;border-radius:50%;object-fit:cover'>" if avatar else ""
+        body=f"""<div class="card"><h1>النشر إلى TikTok</h1>
+<div style="display:flex;gap:14px;align-items:center">{avatar_html}<div><strong>{nickname}</strong><br><small>@{username}</small></div></div>
+<p>الحد الأقصى لهذا الحساب: <strong>{max_sec} ثانية</strong>.</p></div>
+<div class="card">
+<label>الفيديو الأصلي من جهازك</label><input id="videoFile" type="file" accept="video/mp4" required>
+<video id="preview" controls hidden></video>
+<label>العنوان / الوصف</label><input id="title" type="text" maxlength="2200" placeholder="اكتب وصفك بنفسك — لا يوجد نص مفروض">
+<label>الخصوصية</label><select id="privacy" required>{privacy_options}</select>
+<div class="row"><div>
+<label class="check"><input id="comment" type="checkbox" {'disabled' if comment_disabled else ''}> السماح بالتعليقات</label>
+<label class="check"><input id="duet" type="checkbox" {'disabled' if duet_disabled else ''}> السماح بـ Duet</label>
+<label class="check"><input id="stitch" type="checkbox" {'disabled' if stitch_disabled else ''}> السماح بـ Stitch</label>
+</div><div><p class="muted">لا يتم تفعيل أي تفاعل افتراضيًا. الخيارات المعطلة تعكس إعدادات حسابك الحالية في TikTok.</p></div></div>
+<label class="check"><input id="commercial" type="checkbox"> هذا محتوى تجاري</label>
+<div id="commercialNote" class="danger" hidden>النشر التجاري غير مدعوم في هذه النسخة؛ ألغِ هذا الخيار للمتابعة.</div>
+<label class="check"><input id="consent" type="checkbox"> أؤكد أنني أملك حق مشاركة هذا المحتوى، وأوافق صراحة على إرساله إلى TikTok. وبالنشر أوافق على تأكيد استخدام الموسيقى في TikTok.</label>
+<button id="publish" disabled>إرسال إلى TikTok</button>
+<p class="muted">قد تستغرق المعالجة عدة دقائق قبل ظهور النتيجة على ملفك.</p>
+<div id="status" class="status" hidden></div></div>"""
+        script=f"""<script>
+const maxSec={max_sec}; const csrf={json.dumps(sess.get("csrf",""))};
+const f=document.getElementById('videoFile'), p=document.getElementById('preview'), btn=document.getElementById('publish');
+const privacy=document.getElementById('privacy'), consent=document.getElementById('consent'), commercial=document.getElementById('commercial');
+let duration=0;
+function ready(){{
+ document.getElementById('commercialNote').hidden=!commercial.checked;
+ btn.disabled=!(f.files.length&&privacy.value&&consent.checked&&!commercial.checked&&duration>0&&duration<=maxSec);
+}}
+[f,privacy,consent,commercial].forEach(x=>x.addEventListener('change',ready));
+f.addEventListener('change',()=>{{duration=0; if(!f.files.length) return ready(); const u=URL.createObjectURL(f.files[0]); p.src=u;p.hidden=false;p.onloadedmetadata=()=>{{duration=p.duration;ready();}};}});
+btn.addEventListener('click',async()=>{{
+ btn.disabled=true; const s=document.getElementById('status'); s.hidden=false;s.textContent='Uploading...';
+ const file=f.files[0];
+ const q=new URLSearchParams({{
+  title:document.getElementById('title').value,
+  privacy:privacy.value,
+  duration_sec:String(duration),
+  allow_comment:String(document.getElementById('comment').checked),
+  allow_duet:String(document.getElementById('duet').checked),
+  allow_stitch:String(document.getElementById('stitch').checked),
+  consent:'true'
+ }});
+ try{{
+  const r=await fetch('/api/post?'+q.toString(),{{method:'POST',headers:{{'Content-Type':'video/mp4','X-CSRF-Token':csrf}},body:file}});
+  const j=await r.json(); if(!r.ok){{s.textContent='Error: '+JSON.stringify(j);ready();return;}}
+  s.textContent='Upload accepted. Processing…\nPublish ID: '+j.publish_id;
+  poll(j.publish_id,s);
+ }}catch(e){{s.textContent='Upload failed';ready();}}
+}});
+async function poll(id,s){{
+ for(let i=0;i<30;i++){{
+  await new Promise(r=>setTimeout(r,2500));
+  const r=await fetch('/api/status?publish_id='+encodeURIComponent(id));
+  const j=await r.json(); s.textContent='TikTok status:\n'+JSON.stringify(j,null,2);
+  const st=((j.data||{{}}).status||'').toUpperCase();
+  if(st==='FAILED'||st==='PUBLISH_COMPLETE'||st==='SEND_TO_USER_INBOX') return;
+ }}
+}}
+</script>"""
+        return self.send_html(200,page("Share to TikTok",body,script))
 
-        return self.js(200,{
-            "authorized":True,
-            "provider":"tiktok",
-            "scope":scope,
-            "token_plaintext_exposed":False,
-            "publication_authority":False,
-            "private_test":private_test,
-        })
+    def post_video(self,p):
+        sid,sess=self.get_session()
+        if not sess or not sess.get("access_token"):
+            return self.js(401,{"error":"not_authorized"})
+        if self.headers.get("X-CSRF-Token","")!=sess.get("csrf",""):
+            return self.js(403,{"error":"csrf_failed"})
+        q=urllib.parse.parse_qs(p.query,keep_blank_values=True)
+        if q.get("consent",["false"])[0]!="true":
+            return self.js(400,{"error":"explicit_consent_required"})
+        try: length=int(self.headers.get("Content-Length","0"))
+        except Exception: length=0
+        if length<=0 or length>MAX_UPLOAD_BYTES:
+            return self.js(400,{"error":"invalid_file_size","max_bytes":MAX_UPLOAD_BYTES})
+        ctype=self.headers.get("Content-Type","")
+        if ctype!="video/mp4":
+            return self.js(400,{"error":"mp4_required"})
+        try: duration=float(q.get("duration_sec",["0"])[0])
+        except Exception: duration=0
+        title=q.get("title",[""])[0][:2200]
+        privacy=q.get("privacy",[""])[0]
+        allow_comment=q.get("allow_comment",["false"])[0]=="true"
+        allow_duet=q.get("allow_duet",["false"])[0]=="true"
+        allow_stitch=q.get("allow_stitch",["false"])[0]=="true"
+
+        ok,status,creator,err=query_creator(sess["access_token"])
+        if not ok:
+            return self.js(502,{"error":"creator_info_failed","provider_code":err.get("code"),"http_status":status})
+        options=list(creator.get("privacy_level_options") or [])
+        max_sec=int(creator.get("max_video_post_duration_sec") or 0)
+        if privacy not in options:
+            return self.js(400,{"error":"privacy_not_allowed","allowed":options})
+        if duration<=0 or (max_sec and duration>max_sec):
+            return self.js(400,{"error":"duration_not_allowed","max_sec":max_sec})
+        if creator.get("comment_disabled") and allow_comment:
+            return self.js(400,{"error":"comments_disabled_by_creator"})
+        if creator.get("duet_disabled") and allow_duet:
+            return self.js(400,{"error":"duet_disabled_by_creator"})
+        if creator.get("stitch_disabled") and allow_stitch:
+            return self.js(400,{"error":"stitch_disabled_by_creator"})
+
+        post_info={{
+            "title":title,
+            "privacy_level":privacy,
+            "disable_comment":not allow_comment,
+            "disable_duet":not allow_duet,
+            "disable_stitch":not allow_stitch,
+            "brand_content_toggle":False,
+            "brand_organic_toggle":False,
+        }}
+        init_payload={{
+            "post_info":post_info,
+            "source_info":{{"source":"FILE_UPLOAD","video_size":length,"chunk_size":length,"total_chunk_count":1}},
+        }}
+        st,init=api_json_post(DIRECT_POST_INIT_URL,sess["access_token"],init_payload)
+        ierr=(init.get("error") or {}) if isinstance(init,dict) else {{}}
+        data=(init.get("data") or {{}}) if isinstance(init,dict) else {{}}
+        if not (st==200 and ierr.get("code")=="ok"):
+            return self.js(502,{"error":"direct_post_init_failed","provider":ierr,"http_status":st})
+        upload_url=str(data.get("upload_url") or "")
+        publish_id=str(data.get("publish_id") or "")
+        if not upload_url or not publish_id:
+            return self.js(502,{"error":"missing_upload_target"})
+
+        video=self.rfile.read(length)
+        req=urllib.request.Request(
+            upload_url,data=video,
+            headers={{"Content-Type":"video/mp4","Content-Length":str(length),"Content-Range":f"bytes 0-{{length-1}}/{{length}}"}},
+            method="PUT",
+        )
+        try:
+            with urllib.request.urlopen(req,timeout=60) as r:
+                upload_status=r.status; r.read()
+        except urllib.error.HTTPError as e:
+            upload_status=e.code; e.read()
+        except Exception:
+            return self.js(502,{"error":"upload_unreachable"})
+        if not (200<=upload_status<300):
+            return self.js(502,{"error":"binary_upload_failed","http_status":upload_status})
+        with _LOCK:
+            sess["last_publish_id"]=publish_id; sess["updated_at"]=int(time.time())
+        return self.js(201,{"ok":True,"publish_id":publish_id,"privacy_requested":privacy,"public_client_approved":False})
+
+    def status_api(self,q):
+        sid,sess=self.get_session()
+        if not sess or not sess.get("access_token"):
+            return self.js(401,{"error":"not_authorized"})
+        publish_id=q.get("publish_id",[""])[0]
+        if not publish_id:
+            return self.js(400,{"error":"publish_id_required"})
+        st,payload=api_json_post(STATUS_URL,sess["access_token"],{"publish_id":publish_id})
+        return self.js(st if st else 502,payload)
 
 if __name__=="__main__":
     ThreadingHTTPServer(("0.0.0.0",int(os.environ.get("PORT","10000"))),Handler).serve_forever()
