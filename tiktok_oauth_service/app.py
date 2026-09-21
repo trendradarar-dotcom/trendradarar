@@ -385,7 +385,7 @@ async function poll(id,s){{
         if creator.get("stitch_disabled") and allow_stitch:
             return self.js(400,{"error":"stitch_disabled_by_creator"})
 
-        post_info={{
+        post_info={
             "title":title,
             "privacy_level":privacy,
             "disable_comment":not allow_comment,
@@ -393,14 +393,14 @@ async function poll(id,s){{
             "disable_stitch":not allow_stitch,
             "brand_content_toggle":False,
             "brand_organic_toggle":False,
-        }}
-        init_payload={{
+        }
+        init_payload={
             "post_info":post_info,
-            "source_info":{{"source":"FILE_UPLOAD","video_size":length,"chunk_size":length,"total_chunk_count":1}},
-        }}
+            "source_info":{"source":"FILE_UPLOAD","video_size":length,"chunk_size":length,"total_chunk_count":1},
+        }
         st,init=api_json_post(DIRECT_POST_INIT_URL,sess["access_token"],init_payload)
-        ierr=(init.get("error") or {}) if isinstance(init,dict) else {{}}
-        data=(init.get("data") or {{}}) if isinstance(init,dict) else {{}}
+        ierr=(init.get("error") or {}) if isinstance(init,dict) else {}
+        data=(init.get("data") or {}) if isinstance(init,dict) else {}
         if not (st==200 and ierr.get("code")=="ok"):
             return self.js(502,{"error":"direct_post_init_failed","provider":ierr,"http_status":st})
         upload_url=str(data.get("upload_url") or "")
@@ -411,7 +411,7 @@ async function poll(id,s){{
         video=self.rfile.read(length)
         req=urllib.request.Request(
             upload_url,data=video,
-            headers={{"Content-Type":"video/mp4","Content-Length":str(length),"Content-Range":f"bytes 0-{{length-1}}/{{length}}"}},
+            headers={"Content-Type":"video/mp4","Content-Length":str(length),"Content-Range":f"bytes 0-{length-1}/{length}"},
             method="PUT",
         )
         try:
