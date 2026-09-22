@@ -419,7 +419,7 @@ class Handler(BaseHTTPRequestHandler):
 <label class="check"><input id="consent" type="checkbox"> أؤكد أنني أملك حق مشاركة هذا المحتوى، وأوافق صراحة على إرساله إلى TikTok. وبالنشر أوافق على تأكيد استخدام الموسيقى في TikTok.</label>
 <div class="row">
 <div><button id="publish" disabled>نشر مباشر إلى TikTok</button></div>
-<div><button id="draft" disabled>رفع كمسودة إلى TikTok</button></div>
+<div><button id="draft">رفع كمسودة إلى TikTok</button></div>
 </div>
 <p class="muted">النشر المباشر يستخدم الإعدادات أعلاه. رفع المسودة يرسل الفيديو إلى TikTok Inbox لتكمل التحرير والنشر من داخل TikTok.</p>
 <div id="status" class="status" hidden></div></div>"""
@@ -431,19 +431,22 @@ let duration=0;
 function ready(){{
  document.getElementById('commercialNote').hidden=!commercial.checked;
  btn.disabled=preAuditBlocked || !(f.files.length&&privacy.value&&consent.checked&&!commercial.checked);
- draftBtn.disabled=!(f.files.length&&consent.checked&&!commercial.checked);
 }}
 [f,privacy,consent,commercial].forEach(x=>x.addEventListener('change',ready));
 f.addEventListener('change',()=>{{duration=0; if(!f.files.length) return ready(); ready(); const u=URL.createObjectURL(f.files[0]); p.src=u;p.hidden=false;p.onloadedmetadata=()=>{{duration=p.duration;ready();}};p.onerror=()=>{{duration=0;ready();}};}});
 draftBtn.addEventListener('click',async()=>{{
- draftBtn.disabled=true; const s=document.getElementById('status'); s.hidden=false;s.textContent='Uploading draft...';
+ const s=document.getElementById('status'); s.hidden=false;
+ if(!f.files.length){{s.textContent='اختر ملف MP4 أولًا.';return;}}
+ if(!consent.checked){{s.textContent='فعّل مربع الموافقة الصريحة أولًا.';return;}}
+ if(commercial.checked){{s.textContent='ألغِ خيار المحتوى التجاري في اختبار المراجعة الحالي.';return;}}
+ draftBtn.disabled=true; s.textContent='Uploading draft...';
  const file=f.files[0];
  try{{
   const r=await fetch('/api/upload-draft?consent=true&duration_sec='+encodeURIComponent(String(duration)),{{method:'POST',headers:{{'Content-Type':'video/mp4','X-CSRF-Token':csrf}},body:file}});
-  const j=await r.json(); if(!r.ok){{s.textContent='Draft error: '+JSON.stringify(j);ready();return;}}
+  const j=await r.json(); if(!r.ok){{s.textContent='Draft error: '+JSON.stringify(j);draftBtn.disabled=false;return;}}
   s.textContent='Draft accepted. TikTok is processing it…\nPublish ID: '+j.publish_id+'\nبعد الإرسال افتح TikTok Inbox لإكمال التحرير والنشر.';
   poll(j.publish_id,s);
- }}catch(e){{s.textContent='Draft upload failed';ready();}}
+ }}catch(e){{s.textContent='Draft upload failed';draftBtn.disabled=false;}}
 }});
 btn.addEventListener('click',async()=>{{
  btn.disabled=true; const s=document.getElementById('status'); s.hidden=false;s.textContent='Uploading...';
