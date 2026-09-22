@@ -444,7 +444,7 @@ draftBtn.addEventListener('click',async()=>{{
  try{{
   const r=await fetch('/api/upload-draft?consent=true&duration_sec='+encodeURIComponent(String(duration)),{{method:'POST',headers:{{'Content-Type':'video/mp4','X-CSRF-Token':csrf}},body:file}});
   const j=await r.json(); if(!r.ok){{s.textContent='Draft error: '+JSON.stringify(j);draftBtn.disabled=false;return;}}
-  s.textContent='Draft accepted. TikTok is processing it…\nPublish ID: '+j.publish_id+'\nبعد الإرسال افتح TikTok Inbox لإكمال التحرير والنشر.';
+  s.textContent='Draft accepted. TikTok is processing it…\\nPublish ID: '+j.publish_id+'\\nبعد الإرسال افتح TikTok Inbox لإكمال التحرير والنشر.';
   poll(j.publish_id,s);
  }}catch(e){{s.textContent='Draft upload failed';draftBtn.disabled=false;}}
 }});
@@ -463,7 +463,7 @@ btn.addEventListener('click',async()=>{{
  try{{
   const r=await fetch('/api/post?'+q.toString(),{{method:'POST',headers:{{'Content-Type':'video/mp4','X-CSRF-Token':csrf}},body:file}});
   const j=await r.json(); if(!r.ok){{s.textContent='Error: '+JSON.stringify(j);ready();return;}}
-  s.textContent='Upload accepted. Processing…\nPublish ID: '+j.publish_id;
+  s.textContent='Upload accepted. Processing…\\nPublish ID: '+j.publish_id;
   poll(j.publish_id,s);
  }}catch(e){{s.textContent='Upload failed';ready();}}
 }});
@@ -471,7 +471,7 @@ async function poll(id,s){{
  for(let i=0;i<30;i++){{
   await new Promise(r=>setTimeout(r,2500));
   const r=await fetch('/api/status?publish_id='+encodeURIComponent(id));
-  const j=await r.json(); s.textContent='TikTok status:\n'+JSON.stringify(j,null,2);
+  const j=await r.json(); s.textContent='TikTok status:\\n'+JSON.stringify(j,null,2);
   const st=((j.data||{{}}).status||'').toUpperCase();
   if(st==='FAILED'||st==='PUBLISH_COMPLETE'||st==='SEND_TO_USER_INBOX') return;
  }}
