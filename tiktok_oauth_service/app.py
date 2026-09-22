@@ -7,8 +7,9 @@ AUTH_URL="https://www.tiktok.com/v2/auth/authorize/"
 TOKEN_URL="https://open.tiktokapis.com/v2/oauth/token/"
 CREATOR_INFO_URL="https://open.tiktokapis.com/v2/post/publish/creator_info/query/"
 DIRECT_POST_INIT_URL="https://open.tiktokapis.com/v2/post/publish/video/init/"
+UPLOAD_DRAFT_INIT_URL="https://open.tiktokapis.com/v2/post/publish/inbox/video/init/"
 STATUS_URL="https://open.tiktokapis.com/v2/post/publish/status/fetch/"
-DEFAULT_SCOPES="user.info.basic,video.publish"
+DEFAULT_SCOPES="user.info.basic,video.publish,video.upload"
 STATE_TTL=600
 SESSION_TTL=86400
 MAX_UPLOAD_BYTES=100*1024*1024
@@ -208,9 +209,9 @@ class Handler(BaseHTTPRequestHandler):
             body="""<div class="card"><h1>سياسة خصوصية تكامل TikTok</h1>
 <p>آخر تحديث: 22 سبتمبر 2026</p>
 <h2>ما الذي نصل إليه؟</h2>
-<p>عندما يربط المستخدم حساب TikTok، نستخدم فقط الصلاحيات التي وافق عليها لتحديد الحساب المخول وتنفيذ عملية نشر يطلبها المستخدم ومتابعة حالتها. لا نطلب كلمة مرور TikTok.</p>
+<p>عندما يربط المستخدم حساب TikTok، نستخدم فقط الصلاحيات التي وافق عليها لتحديد الحساب المخول وتنفيذ عملية نشر مباشر أو رفع كمسودة يطلبها المستخدم ومتابعة حالتها. لا نطلب كلمة مرور TikTok.</p>
 <h2>كيف نستخدم البيانات؟</h2>
-<p>نستخدم بيانات الحساب الأساسية ومعلومات Creator Info اللازمة لعرض الحساب المستهدف وخيارات الخصوصية والقيود الحالية، ثم نستخدم صلاحية Direct Post فقط بعد اختيار المستخدم للفيديو والإعدادات وإعطائه موافقة صريحة.</p>
+<p>نستخدم بيانات الحساب الأساسية ومعلومات Creator Info اللازمة لعرض الحساب المستهدف وخيارات الخصوصية والقيود الحالية. يمكن للمستخدم اختيار Direct Post بعد مراجعة الإعدادات والموافقة الصريحة، أو اختيار رفع الفيديو كمسودة إلى TikTok لاستكمال التحرير والنشر من داخل TikTok.</p>
 <h2>رموز التفويض والأمان</h2>
 <p>تتم معالجة access token وrefresh token على الخادم ولا نعرض قيمهما الصريحة للمتصفح. نحتفظ ببيانات التفويض فقط بقدر ما يلزم لتقديم الاتصال المصرح به وتشغيله.</p>
 <h2>المشاركة والبيع</h2>
@@ -233,7 +234,7 @@ class Handler(BaseHTTPRequestHandler):
 <h2>المحتوى والحقوق</h2>
 <p>يجب ألا يرسل المستخدم إلا محتوى يملك حق نشره، وأن يلتزم بحقوق الملكية الفكرية وسياسات TikTok والأنظمة المعمول بها.</p>
 <h2>لا نشر صامت</h2>
-<p>لا يبدأ Direct Post إلا بعد اختيار المستخدم للإعدادات وتأكيد الموافقة الصريحة والضغط على زر الإرسال.</p>
+<p>لا يبدأ Direct Post ولا رفع المسودة إلا بعد اختيار المستخدم للفيديو وتأكيد الموافقة الصريحة والضغط على الزر المقابل للعملية.</p>
 <h2>الخصوصية</h2>
 <p>توضح <a href="/privacy">سياسة خصوصية TikTok</a> كيفية استخدام بيانات التفويض والمعلومات التشغيلية المرتبطة بالتكامل.</p>
 <h2>التواصل</h2>
@@ -272,6 +273,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.post_video(p)
         if p.path=="/api/private-test":
             return self.private_test_post()
+        if p.path=="/api/upload-draft":
+            return self.upload_draft(p)
         return self.js(404,{"error":"not_found"})
 
     def start_auth(self,q=None):
@@ -390,12 +393,15 @@ class Handler(BaseHTTPRequestHandler):
 <label class="check"><input id="commercial" type="checkbox"> هذا محتوى تجاري</label>
 <div id="commercialNote" class="danger" hidden>النشر التجاري غير مدعوم في هذه النسخة؛ ألغِ هذا الخيار للمتابعة.</div>
 <label class="check"><input id="consent" type="checkbox"> أؤكد أنني أملك حق مشاركة هذا المحتوى، وأوافق صراحة على إرساله إلى TikTok. وبالنشر أوافق على تأكيد استخدام الموسيقى في TikTok.</label>
-<button id="publish" disabled>إرسال إلى TikTok</button>
-<p class="muted">قد تستغرق المعالجة عدة دقائق قبل ظهور النتيجة على ملفك.</p>
+<div class="row">
+<div><button id="publish" disabled>نشر مباشر إلى TikTok</button></div>
+<div><button id="draft" disabled>رفع كمسودة إلى TikTok</button></div>
+</div>
+<p class="muted">النشر المباشر يستخدم الإعدادات أعلاه. رفع المسودة يرسل الفيديو إلى TikTok Inbox لتكمل التحرير والنشر من داخل TikTok.</p>
 <div id="status" class="status" hidden></div></div>"""
         script=f"""<script>
 const maxSec={max_sec}; const csrf={json.dumps(sess.get("csrf",""))}; const preAuditBlocked={str((not approved and not account_private)).lower()};
-const f=document.getElementById('videoFile'), p=document.getElementById('preview'), btn=document.getElementById('publish');
+const f=document.getElementById('videoFile'), p=document.getElementById('preview'), btn=document.getElementById('publish'), draftBtn=document.getElementById('draft');
 const privacy=document.getElementById('privacy'), consent=document.getElementById('consent'), commercial=document.getElementById('commercial');
 let duration=0;
 function ready(){{
@@ -404,6 +410,16 @@ function ready(){{
 }}
 [f,privacy,consent,commercial].forEach(x=>x.addEventListener('change',ready));
 f.addEventListener('change',()=>{{duration=0; if(!f.files.length) return ready(); const u=URL.createObjectURL(f.files[0]); p.src=u;p.hidden=false;p.onloadedmetadata=()=>{{duration=p.duration;ready();}};}});
+draftBtn.addEventListener('click',async()=>{
+ draftBtn.disabled=true; const s=document.getElementById('status'); s.hidden=false;s.textContent='Uploading draft...';
+ const file=f.files[0];
+ try{
+  const r=await fetch('/api/upload-draft?consent=true&duration_sec='+encodeURIComponent(String(duration)),{method:'POST',headers:{'Content-Type':'video/mp4','X-CSRF-Token':csrf},body:file});
+  const j=await r.json(); if(!r.ok){s.textContent='Draft error: '+JSON.stringify(j);ready();return;}
+  s.textContent='Draft accepted. TikTok is processing it…\nPublish ID: '+j.publish_id+'\nبعد الإرسال افتح TikTok Inbox لإكمال التحرير والنشر.';
+  poll(j.publish_id,s);
+ }catch(e){s.textContent='Draft upload failed';ready();}
+});
 btn.addEventListener('click',async()=>{{
  btn.disabled=true; const s=document.getElementById('status'); s.hidden=false;s.textContent='Uploading...';
  const file=f.files[0];
@@ -652,6 +668,70 @@ async function poll(id,s){{
         with _LOCK:
             sess["last_publish_id"]=publish_id; sess["updated_at"]=int(time.time())
         return self.js(201,{"ok":True,"publish_id":publish_id,"privacy_requested":privacy,"public_client_approved":approved})
+
+    def upload_draft(self,p):
+        sid,sess=self.get_session()
+        if not sess or not sess.get("access_token"):
+            return self.js(401,{"error":"not_authorized"})
+        if self.headers.get("X-CSRF-Token","")!=sess.get("csrf",""):
+            return self.js(403,{"error":"csrf_failed"})
+        q=urllib.parse.parse_qs(p.query,keep_blank_values=True)
+        if q.get("consent",["false"])[0]!="true":
+            return self.js(400,{"error":"explicit_consent_required"})
+        try: length=int(self.headers.get("Content-Length","0"))
+        except Exception: length=0
+        if length<=0 or length>MAX_UPLOAD_BYTES:
+            return self.js(400,{"error":"invalid_file_size","max_bytes":MAX_UPLOAD_BYTES})
+        if self.headers.get("Content-Type","")!="video/mp4":
+            return self.js(400,{"error":"mp4_required"})
+        video=self.rfile.read(length)
+        duration=mp4_duration_seconds(video)
+        if duration<=0:
+            return self.js(400,{"error":"invalid_mp4_or_duration_unreadable"})
+        ok,status,creator,err=query_creator(sess["access_token"])
+        if not ok:
+            return self.js(502,{"error":"creator_info_failed","provider_code":err.get("code"),"http_status":status})
+        max_sec=int(creator.get("max_video_post_duration_sec") or 0)
+        if max_sec and duration>max_sec:
+            return self.js(400,{"error":"duration_not_allowed","max_sec":max_sec})
+
+        init_payload={
+            "source_info":{
+                "source":"FILE_UPLOAD",
+                "video_size":length,
+                "chunk_size":length,
+                "total_chunk_count":1
+            }
+        }
+        print("DRAFT_STAGE init", flush=True)
+        st,init=api_json_post(UPLOAD_DRAFT_INIT_URL,sess["access_token"],init_payload)
+        ierr=(init.get("error") or {}) if isinstance(init,dict) else {}
+        data=(init.get("data") or {}) if isinstance(init,dict) else {}
+        print(f"DRAFT_STAGE init_http={st} code={ierr.get('code')}", flush=True)
+        if not (st==200 and ierr.get("code")=="ok"):
+            return self.js(502,{"error":"draft_init_failed","provider":ierr,"http_status":st})
+        upload_url=str(data.get("upload_url") or "")
+        publish_id=str(data.get("publish_id") or "")
+        if not upload_url or not publish_id:
+            return self.js(502,{"error":"missing_upload_target"})
+        req=urllib.request.Request(
+            upload_url,data=video,
+            headers={"Content-Type":"video/mp4","Content-Length":str(length),"Content-Range":f"bytes 0-{length-1}/{length}"},
+            method="PUT",
+        )
+        try:
+            with urllib.request.urlopen(req,timeout=60) as r:
+                upload_status=r.status; r.read()
+        except urllib.error.HTTPError as e:
+            upload_status=e.code; e.read()
+        except Exception:
+            return self.js(502,{"error":"upload_unreachable"})
+        print(f"DRAFT_STAGE upload_http={upload_status}", flush=True)
+        if not (200<=upload_status<300):
+            return self.js(502,{"error":"binary_upload_failed","http_status":upload_status})
+        with _LOCK:
+            sess["last_draft_publish_id"]=publish_id; sess["updated_at"]=int(time.time())
+        return self.js(201,{"ok":True,"publish_id":publish_id,"mode":"draft_to_tiktok_inbox"})
 
     def status_api(self,q):
         sid,sess=self.get_session()
