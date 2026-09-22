@@ -127,3 +127,30 @@ The current creator-facing flow already:
 SUBMIT_FOR_REVIEW = FORBIDDEN until R1-R5 are all closed with fresh evidence.
 
 TIKTOK_AUDIT_APPROVED must remain false/unset until documented TikTok approval is received.
+
+
+## Progress update — 2026-09-22 after creator-facing hardening
+
+### Closed in runtime/code
+- R2 runtime OAuth request scopes minimized to: user.info.basic,video.publish.
+- TIKTOK_SCOPES on Render updated to: user.info.basic,video.publish.
+- TikTok-specific Privacy page implemented at /privacy in the isolated TikTok service.
+- TikTok-specific Terms page implemented at /terms in the isolated TikTok service.
+- Creator-facing landing copy now states the service is for authorized creators and that posting is user-initiated.
+- Browser upload readiness bug fixed so metadata preview failure no longer permanently blocks the send button.
+- Render deploy for commit cc7b25841b3300117217a266f89559c8ba8e2ef7 reached LIVE.
+
+### Still open — external configuration / evidence gates
+- R1: Add and verify custom domain share.trendradar.com.co on the isolated Render TikTok service.
+- R1: Create the required DNS record at the domain/DNS provider.
+- R1: After custom domain is live, change TikTok Web redirect URI to:
+  https://share.trendradar.com.co/auth/tiktok/callback
+- R1: Verify the relevant TikTok URL property for the review domain if TikTok requests it.
+- R2 portal-side: Remove video.upload from the TikTok Developer production configuration unless a draft-upload feature is intentionally added and demonstrated. Runtime already requests only user.info.basic,video.publish.
+- R5: Record the real creator-facing end-to-end review demo on the final review domain.
+- FINAL: Submit for review only after all above items have fresh evidence.
+
+### Important
+Do not change TIKTOK_REDIRECT_URI on Render before the matching redirect URI is accepted in TikTok Developer.
+Do not set TIKTOK_AUDIT_APPROVED=true before documented TikTok approval.
+Do not modify Trend Radar main public Google/YouTube privacy pages for this TikTok review path.
