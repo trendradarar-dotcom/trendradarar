@@ -1,6 +1,7 @@
-import hashlib, html, json, os, secrets, threading, time, urllib.error, urllib.parse, urllib.request
+import base64, hashlib, html, json, os, secrets, threading, time, urllib.error, urllib.parse, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from http.cookies import SimpleCookie
+from pathlib import Path
 
 AUTH_URL="https://www.tiktok.com/v2/auth/authorize/"
 TOKEN_URL="https://open.tiktokapis.com/v2/oauth/token/"
@@ -11,6 +12,7 @@ DEFAULT_SCOPES="user.info.basic,video.upload,video.publish"
 STATE_TTL=600
 SESSION_TTL=86400
 MAX_UPLOAD_BYTES=100*1024*1024
+DEMO_B64_PATH=Path(__file__).with_name("demo_video.b64")
 
 _STATES={}
 _SESSIONS={}
@@ -58,6 +60,9 @@ def query_creator(token):
     data=(payload.get("data") or {}) if isinstance(payload,dict) else {}
     ok=(status==200 and err.get("code")=="ok")
     return ok,status,data,err
+
+def load_demo_video():
+    return base64.b64decode(DEMO_B64_PATH.read_text(encoding="utf-8").strip())
 
 def mp4_duration_seconds(blob):
     i=blob.find(b"mvhd")
@@ -210,6 +215,9 @@ class Handler(BaseHTTPRequestHandler):
         if p.path=="/api/status":
             return self.status_api(q)
 
+        if p.path=="/private-test":
+            return self.private_test_page(q)
+
         if p.path=="/auth/tiktok/status":
             sid,sess=self.get_session()
             return self.js(200,{
@@ -225,6 +233,8 @@ class Handler(BaseHTTPRequestHandler):
         p=urllib.parse.urlsplit(self.path)
         if p.path=="/api/post":
             return self.post_video(p)
+        if p.path=="/api/private-test":
+            return self.private_test_post()
         return self.js(404,{"error":"not_found"})
 
     def start_auth(self):
@@ -383,6 +393,126 @@ async function poll(id,s){{
 }}
 </script>"""
         return self.send_html(200,page("Share to TikTok",body,script))
+
+    def private_test_page(self,q):
+        sid,sess=self.get_session()
+        if not sess or not sess.get("access_token"):
+            return self.redirect("/auth/tiktok/start")
+        ok,status,creator,err=query_creator(sess["access_token"])
+        if not ok:
+            code=html.escape(str(err.get("code") or status))
+            return self.send_html(502,page("Private test blocked",f"<div class='card'><h1>تعذر قراءة إعدادات TikTok</h1><p class='danger'>{code}</p></div>"))
+        options=list(creator.get("privacy_level_options") or [])
+        approved=audit_approved()
+        account_private=("PUBLIC_TO_EVERYONE" not in options and "FOLLOWER_OF_CREATOR" in options)
+        if not approved and not account_private:
+            return self.send_html(400,page("Private account required","<div class='card'><h1>الحساب يجب أن يبقى Private للاختبار قبل التدقيق.</h1></div>"))
+        result_html=""
+        publish_id=q.get("publish_id",[""])[0]
+        if publish_id:
+            st,payload=api_json_post(STATUS_URL,sess["access_token"],{"publish_id":publish_id})
+            safe=html.escape(json.dumps(payload,ensure_ascii=False,indent=2))
+            result_html=f"<div class='card'><h2>حالة TikTok</h2><pre class='status'>{safe}</pre></div>"
+        body=f"""<div class="card"><h1>اختبار TikTok الخاص من الخادم</h1>
+<p>هذا الاختبار لا يرفع ملفًا من المتصفح. يستخدم فيديو الاختبار المحايد الموجود داخل الخدمة ويرسله بخصوصية <strong>SELF_ONLY</strong> فقط.</p>
+<form method="post" action="/api/private-test">
+<input type="hidden" name="csrf" value="{html.escape(sess.get('csrf',''))}">
+<button type="submit">تشغيل الاختبار الخاص الآن</button>
+</form></div>{result_html}"""
+        return self.send_html(200,page("TikTok private server test",body))
+
+    def private_test_post(self):
+        sid,sess=self.get_session()
+        if not sess or not sess.get("access_token"):
+            return self.redirect("/auth/tiktok/start")
+        try:
+            length=int(self.headers.get("Content-Length","0"))
+        except Exception:
+            length=0
+        raw=self.rfile.read(length) if length>0 else b""
+        form=urllib.parse.parse_qs(raw.decode("utf-8",errors="ignore"),keep_blank_values=True)
+        if form.get("csrf",[""])[0]!=sess.get("csrf",""):
+            return self.js(403,{"error":"csrf_failed"})
+
+        print("PRIVATE_TEST stage=load_demo", flush=True)
+        try:
+            video=load_demo_video()
+        except Exception:
+            return self.js(500,{"error":"demo_video_unavailable"})
+        duration=mp4_duration_seconds(video)
+        if duration<=0:
+            return self.js(500,{"error":"demo_video_invalid"})
+
+        print("PRIVATE_TEST stage=creator_info", flush=True)
+        ok,status,creator,err=query_creator(sess["access_token"])
+        if not ok:
+            return self.js(502,{"error":"creator_info_failed","provider_code":err.get("code"),"http_status":status})
+        options=list(creator.get("privacy_level_options") or [])
+        approved=audit_approved()
+        account_private=("PUBLIC_TO_EVERYONE" not in options and "FOLLOWER_OF_CREATOR" in options)
+        if not approved and not account_private:
+            return self.js(400,{"error":"unaudited_private_account_required"})
+        if "SELF_ONLY" not in options:
+            return self.js(400,{"error":"self_only_not_available","allowed":options})
+        max_sec=int(creator.get("max_video_post_duration_sec") or 0)
+        if max_sec and duration>max_sec:
+            return self.js(400,{"error":"duration_not_allowed","max_sec":max_sec,"duration":duration})
+
+        init_payload={
+            "post_info":{
+                "title":"",
+                "privacy_level":"SELF_ONLY",
+                "disable_comment":True,
+                "disable_duet":True,
+                "disable_stitch":True,
+                "brand_content_toggle":False,
+                "brand_organic_toggle":False
+            },
+            "source_info":{
+                "source":"FILE_UPLOAD",
+                "video_size":len(video),
+                "chunk_size":len(video),
+                "total_chunk_count":1
+            }
+        }
+        print("PRIVATE_TEST stage=direct_post_init", flush=True)
+        st,init=api_json_post(DIRECT_POST_INIT_URL,sess["access_token"],init_payload)
+        ierr=(init.get("error") or {}) if isinstance(init,dict) else {}
+        data=(init.get("data") or {}) if isinstance(init,dict) else {}
+        print(f"PRIVATE_TEST init_http={st} code={ierr.get('code')}", flush=True)
+        if not (st==200 and ierr.get("code")=="ok"):
+            safe=html.escape(json.dumps({"http_status":st,"provider":ierr},ensure_ascii=False,indent=2))
+            return self.send_html(502,page("TikTok init failed",f"<div class='card'><h1>فشل تهيئة Direct Post</h1><pre class='status'>{safe}</pre></div>"))
+
+        upload_url=str(data.get("upload_url") or "")
+        publish_id=str(data.get("publish_id") or "")
+        if not upload_url or not publish_id:
+            return self.js(502,{"error":"missing_upload_target"})
+        req=urllib.request.Request(
+            upload_url,data=video,
+            headers={"Content-Type":"video/mp4","Content-Length":str(len(video)),"Content-Range":f"bytes 0-{len(video)-1}/{len(video)}"},
+            method="PUT",
+        )
+        print("PRIVATE_TEST stage=binary_upload", flush=True)
+        try:
+            with urllib.request.urlopen(req,timeout=30) as r:
+                upload_status=r.status
+                r.read()
+        except urllib.error.HTTPError as e:
+            upload_status=e.code
+            e.read()
+        except Exception:
+            return self.js(502,{"error":"upload_unreachable"})
+        print(f"PRIVATE_TEST upload_http={upload_status}", flush=True)
+        if not (200<=upload_status<300):
+            return self.js(502,{"error":"binary_upload_failed","http_status":upload_status})
+
+        with _LOCK:
+            sess["last_publish_id"]=publish_id
+            sess["updated_at"]=int(time.time())
+
+        target="/private-test?publish_id="+urllib.parse.quote(publish_id,safe="")
+        return self.redirect(target)
 
     def post_video(self,p):
         print("POST_STAGE received /api/post", flush=True)
