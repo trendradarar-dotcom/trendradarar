@@ -22,6 +22,10 @@ Mutation scope: review preparation only; main/public site unchanged.
 
 STATUS = HOLD_BEFORE_SUBMIT
 
+Closed since initial draft:
+- R2 scope minimization = CLOSED. Runtime OAuth scopes are now user.info.basic,video.publish only.
+- TikTok-specific privacy and terms pages are implemented on the isolated TikTok service. Custom-domain publication of those pages remains pending under R1/R3.
+
 Do not click Submit for review yet.
 
 ## Blocking items before submission
@@ -44,22 +48,20 @@ Preferred remediation:
 Reason for preferred remediation:
 It keeps TikTok review isolated from the currently reviewed YouTube/Google public site and avoids materially changing the public Trend Radar privacy/terms during YouTube API review.
 
-### R2 — Scope minimization
-The creator-facing review flow currently uses:
+### R2 — Scope minimization — CLOSED
+
+Current runtime OAuth scopes:
 - user.info.basic
 - video.publish
 
-The review flow does not need video.upload unless a separate Upload-to-TikTok draft UX is also demonstrated.
+video.upload has been removed from the Render runtime scope configuration and from the default application scope set.
 
-Required Production configuration:
-- Keep user.info.basic.
-- Keep video.publish.
-- Remove video.upload before submission unless a real draft-upload feature is intentionally included and demonstrated end-to-end.
-
-### R3 — TikTok-specific Privacy Policy and Terms
+### R3 — TikTok-specific Privacy Policy and Terms — PARTIALLY CLOSED
 Current public privacy/terms are Google/YouTube-specific.
 
-Required for the TikTok review site:
+Implemented on the isolated TikTok service at /privacy and /terms. Still required before submission: publish these same pages under the final review custom domain.
+
+Coverage includes:
 - TikTok OAuth data categories.
 - Access/refresh token handling.
 - Creator identity/profile data usage.
