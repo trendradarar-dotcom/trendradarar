@@ -204,7 +204,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.js(200,{"ok":True,"configured":configured(),"ui":"creator_facing_v2","audit_approved":audit_approved()})
 
         if p.path=="/auth/tiktok/start":
-            return self.start_auth()
+            return self.start_auth(q)
 
         if p.path=="/auth/tiktok/callback":
             return self.callback(q)
@@ -237,7 +237,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.private_test_post()
         return self.js(404,{"error":"not_found"})
 
-    def start_auth(self):
+    def start_auth(self,q=None):
+        q=q or {}
         if not configured():
             return self.send_html(503,page("Configuration required","<div class='card'><h1>الخدمة غير مهيأة</h1></div>"))
         sid=self.cookie_sid() or secrets.token_urlsafe(24)
@@ -248,7 +249,9 @@ class Handler(BaseHTTPRequestHandler):
             sess.update({"csrf":csrf,"updated_at":now})
             _SESSIONS[sid]=sess
             state=secrets.token_urlsafe(32)
-            _STATES[state]={"sid":sid,"ts":now}
+            requested_next=q.get("next",["/share"])[0]
+            next_path="/private-test" if requested_next=="/private-test" else "/share"
+            _STATES[state]={"sid":sid,"ts":now,"next_path":next_path}
         params={
             "client_key":cfg("TIKTOK_CLIENT_KEY"),
             "response_type":"code",
@@ -268,6 +271,7 @@ class Handler(BaseHTTPRequestHandler):
         if not item or now-int(item.get("ts",0))>STATE_TTL:
             return self.send_html(400,page("Invalid state","<div class='card'><h1>جلسة التفويض غير صالحة</h1><a class='btn' href='/auth/tiktok/start'>ابدأ من جديد</a></div>"))
         sid=item["sid"]
+        next_path=item.get("next_path","/share")
         if not code:
             return self.send_html(400,page("Missing code","<div class='card'><h1>لم يصل رمز التفويض</h1></div>"))
         data=urllib.parse.urlencode({
@@ -298,7 +302,7 @@ class Handler(BaseHTTPRequestHandler):
                 "access_token_sha256":fingerprint(access),"refresh_token_sha256":fingerprint(refresh),
             })
             _SESSIONS[sid]=sess
-        return self.redirect("/share",self.set_cookie_header(sid))
+        return self.redirect(next_path,self.set_cookie_header(sid))
 
     def share_page(self):
         sid,sess=self.get_session()
@@ -397,7 +401,7 @@ async function poll(id,s){{
     def private_test_page(self,q):
         sid,sess=self.get_session()
         if not sess or not sess.get("access_token"):
-            return self.redirect("/auth/tiktok/start")
+            return self.redirect("/auth/tiktok/start?next=%2Fprivate-test")
         ok,status,creator,err=query_creator(sess["access_token"])
         if not ok:
             code=html.escape(str(err.get("code") or status))
