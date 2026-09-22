@@ -229,3 +229,36 @@ No /api/post request is present in the same recording-session logs. Therefore th
 - video.publish creator-facing demo evidence: OPEN — short Direct Post recording still required
 - Submit for review: HOLD
 - TIKTOK_AUDIT_APPROVED: false/unset
+
+
+## Direct Post fresh evidence — 2026-09-22 19:05 Asia/Riyadh
+
+Creator-facing Direct Post technical gate is now CLOSED with fresh live evidence.
+
+Render evidence:
+- POST_STAGE received /api/post
+- POST_STAGE reading_body length=6398
+- Creator Info query: ok=True, HTTP 200
+- Direct Post init: HTTP 200, provider code=ok
+- Binary upload: HTTP 201
+- POST /api/post with privacy=SELF_ONLY and explicit consent: HTTP 201
+- Status polling endpoint: HTTP 200
+- User-visible provider result on the creator-facing review page: PUBLISH_COMPLETE, provider error code=ok
+
+This closes the creator-facing technical proof for video.publish.
+
+Raw Direct Post screen recording uploaded by owner:
+- Conversation file id: file_0000000073008211a095c290bc3b84f2
+- Size: 391,816,595 bytes
+- MIME: video/mp4
+- Raw recording is NOT yet upload-ready for TikTok App Review because it exceeds the portal's 50 MB per-video limit.
+
+Current gate state:
+- Login Kit: PASS
+- user.info.basic: PASS
+- video.upload: PASS
+- video.publish technical execution: PASS
+- Demo 1 (Login + Draft): READY
+- Demo 2 (Direct Post): NEEDS SIZE REDUCTION / FINAL VISUAL REVIEW
+- Submit for review: HOLD only until Demo 2 is under 50 MB and visually confirmed
+- TIKTOK_AUDIT_APPROVED: false/unset
