@@ -410,16 +410,16 @@ function ready(){{
 }}
 [f,privacy,consent,commercial].forEach(x=>x.addEventListener('change',ready));
 f.addEventListener('change',()=>{{duration=0; if(!f.files.length) return ready(); const u=URL.createObjectURL(f.files[0]); p.src=u;p.hidden=false;p.onloadedmetadata=()=>{{duration=p.duration;ready();}};}});
-draftBtn.addEventListener('click',async()=>{
+draftBtn.addEventListener('click',async()=>{{
  draftBtn.disabled=true; const s=document.getElementById('status'); s.hidden=false;s.textContent='Uploading draft...';
  const file=f.files[0];
- try{
-  const r=await fetch('/api/upload-draft?consent=true&duration_sec='+encodeURIComponent(String(duration)),{method:'POST',headers:{'Content-Type':'video/mp4','X-CSRF-Token':csrf},body:file});
-  const j=await r.json(); if(!r.ok){s.textContent='Draft error: '+JSON.stringify(j);ready();return;}
+ try{{
+  const r=await fetch('/api/upload-draft?consent=true&duration_sec='+encodeURIComponent(String(duration)),{{method:'POST',headers:{{'Content-Type':'video/mp4','X-CSRF-Token':csrf}},body:file}});
+  const j=await r.json(); if(!r.ok){{s.textContent='Draft error: '+JSON.stringify(j);ready();return;}}
   s.textContent='Draft accepted. TikTok is processing it…\nPublish ID: '+j.publish_id+'\nبعد الإرسال افتح TikTok Inbox لإكمال التحرير والنشر.';
   poll(j.publish_id,s);
- }catch(e){s.textContent='Draft upload failed';ready();}
-});
+ }}catch(e){{s.textContent='Draft upload failed';ready();}}
+}});
 btn.addEventListener('click',async()=>{{
  btn.disabled=true; const s=document.getElementById('status'); s.hidden=false;s.textContent='Uploading...';
  const file=f.files[0];
