@@ -128,7 +128,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self,fmt,*args):
         path=urllib.parse.urlsplit(self.path).path
-        print(f"{self.address_string()} - {self.command} {path} - {fmt % args}")
+        print(f"{self.address_string()} - {self.command} {path} - {fmt % args}", flush=True)
 
     def end_headers(self):
         for k,v in {
@@ -385,6 +385,7 @@ async function poll(id,s){{
         return self.send_html(200,page("Share to TikTok",body,script))
 
     def post_video(self,p):
+        print("POST_STAGE received /api/post", flush=True)
         sid,sess=self.get_session()
         if not sess or not sess.get("access_token"):
             return self.js(401,{"error":"not_authorized"})
@@ -406,11 +407,15 @@ async function poll(id,s){{
         allow_duet=q.get("allow_duet",["false"])[0]=="true"
         allow_stitch=q.get("allow_stitch",["false"])[0]=="true"
 
+        print(f"POST_STAGE reading_body length={length}", flush=True)
         video=self.rfile.read(length)
+        print(f"POST_STAGE body_read bytes={len(video)}", flush=True)
         duration=mp4_duration_seconds(video)
         if duration<=0:
             return self.js(400,{"error":"invalid_mp4_or_duration_unreadable"})
+        print("POST_STAGE querying_creator", flush=True)
         ok,status,creator,err=query_creator(sess["access_token"])
+        print(f"POST_STAGE creator_result ok={ok} http={status}", flush=True)
         if not ok:
             return self.js(502,{"error":"creator_info_failed","provider_code":err.get("code"),"http_status":status})
         options=list(creator.get("privacy_level_options") or [])
@@ -445,7 +450,9 @@ async function poll(id,s){{
             "post_info":post_info,
             "source_info":{"source":"FILE_UPLOAD","video_size":length,"chunk_size":length,"total_chunk_count":1},
         }
+        print("POST_STAGE initializing_direct_post", flush=True)
         st,init=api_json_post(DIRECT_POST_INIT_URL,sess["access_token"],init_payload)
+        print(f"POST_STAGE init_result http={st} code={((init.get('error') or {}).get('code') if isinstance(init,dict) else 'invalid')}", flush=True)
         ierr=(init.get("error") or {}) if isinstance(init,dict) else {}
         data=(init.get("data") or {}) if isinstance(init,dict) else {}
         if not (st==200 and ierr.get("code")=="ok"):
@@ -455,6 +462,7 @@ async function poll(id,s){{
         if not upload_url or not publish_id:
             return self.js(502,{"error":"missing_upload_target"})
 
+        print("POST_STAGE uploading_binary", flush=True)
         req=urllib.request.Request(
             upload_url,data=video,
             headers={"Content-Type":"video/mp4","Content-Length":str(length),"Content-Range":f"bytes 0-{length-1}/{length}"},
@@ -467,6 +475,7 @@ async function poll(id,s){{
             upload_status=e.code; e.read()
         except Exception:
             return self.js(502,{"error":"upload_unreachable"})
+        print(f"POST_STAGE upload_result http={upload_status}", flush=True)
         if not (200<=upload_status<300):
             return self.js(502,{"error":"binary_upload_failed","http_status":upload_status})
         with _LOCK:
