@@ -20,11 +20,11 @@ Trend Radar uses the Direct Post flow to let creators intentionally share their 
 ## Scope: video.publish
 video.publish is required only for the user-initiated Direct Post operation described above. Trend Radar does not silently publish in the background. The user selects the video and posting settings and gives explicit consent before the upload begins.
 
-## Scope to remove before review unless separately implemented
-video.upload
+## Production scopes now configured
+- user.info.basic
+- video.publish
 
-Reason:
-The Production review flow currently demonstrates Direct Post. If the app is not offering a separate creator-facing Upload-to-TikTok draft workflow, video.upload should be removed so the requested scopes match the demonstrated functionality.
+video.upload has been removed from the runtime OAuth scope set because the Production review flow demonstrates Direct Post only.
 
 ## Review notes
 The integration has been tested in TikTok Sandbox. The Sandbox Direct Post test completed successfully with SELF_ONLY visibility and final TikTok status PUBLISH_COMPLETE. The unaudited integration remains restricted to private testing. Public posting will not be enabled until TikTok approval/audit is documented.
