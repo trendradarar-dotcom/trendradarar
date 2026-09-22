@@ -407,9 +407,10 @@ let duration=0;
 function ready(){{
  document.getElementById('commercialNote').hidden=!commercial.checked;
  btn.disabled=preAuditBlocked || !(f.files.length&&privacy.value&&consent.checked&&!commercial.checked);
+ draftBtn.disabled=!(f.files.length&&consent.checked&&!commercial.checked);
 }}
 [f,privacy,consent,commercial].forEach(x=>x.addEventListener('change',ready));
-f.addEventListener('change',()=>{{duration=0; if(!f.files.length) return ready(); const u=URL.createObjectURL(f.files[0]); p.src=u;p.hidden=false;p.onloadedmetadata=()=>{{duration=p.duration;ready();}};}});
+f.addEventListener('change',()=>{{duration=0; if(!f.files.length) return ready(); ready(); const u=URL.createObjectURL(f.files[0]); p.src=u;p.hidden=false;p.onloadedmetadata=()=>{{duration=p.duration;ready();}};p.onerror=()=>{{duration=0;ready();}};}});
 draftBtn.addEventListener('click',async()=>{{
  draftBtn.disabled=true; const s=document.getElementById('status'); s.hidden=false;s.textContent='Uploading draft...';
  const file=f.files[0];
