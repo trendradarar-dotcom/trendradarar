@@ -17,6 +17,7 @@ DEMO_B64_PATH=Path(__file__).with_name("demo_video.b64")
 
 _STATES={}
 _SESSIONS={}
+_HANDOFFS={}
 _LOCK=threading.Lock()
 
 def cfg(name):
@@ -97,6 +98,9 @@ def clean_stores():
         for sid,v in list(_SESSIONS.items()):
             if now-int(v.get("updated_at",0))>SESSION_TTL:
                 _SESSIONS.pop(sid,None)
+        for token,v in list(_HANDOFFS.items()):
+            if now-int(v.get("ts",0))>STATE_TTL:
+                _HANDOFFS.pop(token,None)
 
 def page(title,body,extra_script=""):
     return f"""<!doctype html>
@@ -247,6 +251,9 @@ class Handler(BaseHTTPRequestHandler):
         if p.path=="/auth/tiktok/callback":
             return self.callback(q)
 
+        if p.path=="/auth/tiktok/resume":
+            return self.resume_handoff(q)
+
         if p.path=="/share":
             return self.share_page()
 
@@ -342,6 +349,23 @@ class Handler(BaseHTTPRequestHandler):
                 "access_token_sha256":fingerprint(access),"refresh_token_sha256":fingerprint(refresh),
             })
             _SESSIONS[sid]=sess
+        public_base=cfg("PUBLIC_BASE_URL").rstrip("/")
+        if public_base:
+            handoff=secrets.token_urlsafe(32)
+            with _LOCK:
+                _HANDOFFS[handoff]={"sid":sid,"ts":int(time.time()),"next_path":next_path}
+            target=public_base+"/auth/tiktok/resume?handoff="+urllib.parse.quote(handoff,safe="")
+            return self.redirect(target)
+        return self.redirect(next_path,self.set_cookie_header(sid))
+
+    def resume_handoff(self,q):
+        token=q.get("handoff",[""])[0]
+        with _LOCK:
+            item=_HANDOFFS.pop(token,None) if token else None
+        if not item or int(time.time())-int(item.get("ts",0))>STATE_TTL:
+            return self.send_html(400,page("Invalid handoff","<div class='card'><h1>جلسة الرجوع غير صالحة</h1><a class='btn' href='/auth/tiktok/start'>ابدأ من جديد</a></div>"))
+        sid=item["sid"]
+        next_path=item.get("next_path","/share")
         return self.redirect(next_path,self.set_cookie_header(sid))
 
     def share_page(self):
