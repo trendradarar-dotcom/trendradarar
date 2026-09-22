@@ -154,3 +154,78 @@ TIKTOK_AUDIT_APPROVED must remain false/unset until documented TikTok approval i
 Do not change TIKTOK_REDIRECT_URI on Render before the matching redirect URI is accepted in TikTok Developer.
 Do not set TIKTOK_AUDIT_APPROVED=true before documented TikTok approval.
 Do not modify Trend Radar main public Google/YouTube privacy pages for this TikTok review path.
+
+
+## Fresh reconciliation — 2026-09-22 17:15 Asia/Riyadh
+
+This section supersedes stale earlier progress bullets where they conflict with fresh live evidence.
+
+### R1 — CLOSED
+- Review domain is live at https://share.trendradar.com.co/
+- Render custom domain verified and certificate issued.
+- TikTok URL property for share.trendradar.com.co verified.
+- Production Login Kit redirect URI registered as https://share.trendradar.com.co/auth/tiktok/callback
+- Sandbox runtime uses the previously registered onrender callback plus one-time handoff to the custom review domain; OAuth tokens are not placed in the handoff URL.
+
+### R2 — CLOSED / INTENTIONAL THREE-SCOPE CONFIGURATION
+Production review now intentionally includes:
+- user.info.basic
+- video.publish
+- video.upload
+
+Both creator-facing capabilities exist:
+- Direct Post via /api/post
+- Upload-to-Inbox draft via /api/upload-draft
+
+Therefore the earlier recommendation to remove video.upload is superseded.
+
+### R3 — CLOSED
+TikTok-specific Privacy and Terms are live on the isolated review domain:
+- https://share.trendradar.com.co/privacy
+- https://share.trendradar.com.co/terms
+
+### R4 — CLOSED
+The review site is creator-facing and requires explicit user action/consent. No silent publishing is enabled.
+
+### R5 — PARTIALLY CLOSED; DIRECT-POST DEMO STILL REQUIRED
+Raw creator recording captured on 2026-09-22:
+- SHA-256: fedc025bcc203fb3294b046bae1d376856393ffc6e6872550bcdd53103ce8034
+- Duration: 102.435733 seconds
+- Size: 169,318,219 bytes
+
+Prepared review clip:
+- Filename: TrendRadar_TikTok_Review_Demo_Login_Draft.mp4
+- SHA-256: 4467cda68dee4ba76641f0a096e883b10db286e34a61c5d111e99789ee645c3a
+- Duration: 37.233333 seconds
+- Size: 913,533 bytes
+- Video: H.264, 1600x856, 30fps
+- Audio: AAC
+- Editing scope: only removal of unrelated ChatGPT/tab-detour segments and compression; no simulated TikTok UI or fabricated provider result.
+
+The prepared clip visibly demonstrates:
+- share.trendradar.com.co
+- Trend Radar Sandbox OAuth consent
+- return to creator-facing /share UI
+- connected creator identity
+- local original MP4 selected
+- explicit consent controls
+- Upload-as-Draft user action
+- TikTok processing/status response
+
+Fresh Render evidence for the same recording session:
+- 2026-09-22T14:14:17Z: GET /auth/tiktok/start -> 302
+- 2026-09-22T14:14:35Z: callback authorized scopes user.info.basic,video.publish,video.upload
+- 2026-09-22T14:14:36Z: GET /share -> 200
+- 2026-09-22T14:15:14Z: DRAFT_STAGE init_http=200 code=ok
+- 2026-09-22T14:15:16Z: DRAFT_STAGE upload_http=201
+- 2026-09-22T14:15:16Z: POST /api/upload-draft -> 201
+
+No /api/post request is present in the same recording-session logs. Therefore this clip MUST NOT be represented as demonstrating Direct Post.
+
+### Current submission gate
+- Login Kit demo evidence: PASS
+- user.info.basic visible/use evidence: PASS
+- video.upload creator-facing demo evidence: PASS
+- video.publish creator-facing demo evidence: OPEN — short Direct Post recording still required
+- Submit for review: HOLD
+- TIKTOK_AUDIT_APPROVED: false/unset
