@@ -8,7 +8,7 @@ TOKEN_URL="https://open.tiktokapis.com/v2/oauth/token/"
 CREATOR_INFO_URL="https://open.tiktokapis.com/v2/post/publish/creator_info/query/"
 DIRECT_POST_INIT_URL="https://open.tiktokapis.com/v2/post/publish/video/init/"
 STATUS_URL="https://open.tiktokapis.com/v2/post/publish/status/fetch/"
-DEFAULT_SCOPES="user.info.basic,video.upload,video.publish"
+DEFAULT_SCOPES="user.info.basic,video.publish"
 STATE_TTL=600
 SESSION_TTL=86400
 MAX_UPLOAD_BYTES=100*1024*1024
@@ -123,8 +123,8 @@ small,.muted{{color:var(--muted)}} video{{width:100%;max-height:420px;background
 <div class="brand"><div class="logo">TR</div><div><strong>رادار الترند — Trend Radar</strong><br><small>اكتشف ما يصعد الآن في بلدك والعالم</small></div></div>
 {body}
 <footer>
-<a href="https://trendradar.com.co/privacy.html">سياسة الخصوصية</a> ·
-<a href="https://trendradar.com.co/terms.html">شروط الاستخدام</a>
+<a href="/privacy">سياسة خصوصية TikTok</a> ·
+<a href="/terms">شروط استخدام TikTok</a>
 <br>تكامل TikTok يستخدم Login Kit وContent Posting API لمشاركة المحتوى الأصلي بموافقة المستخدم.
 </footer></div>{extra_script}</body></html>"""
 
@@ -197,11 +197,48 @@ class Handler(BaseHTTPRequestHandler):
 <p>لا نضيف شعارًا أو علامة مائية إلى الفيديو، ولا نرسل أي ملف قبل ضغطك زر النشر.</p>
 <a class="btn" href="/auth/tiktok/start">ربط حساب TikTok</a></div>
 <div class="card"><h2>كيف يعمل؟</h2>
-<p>1) تسجيل الدخول الآمن عبر TikTok. 2) جلب إعدادات حسابك الحالية. 3) اختيار فيديو من جهازك. 4) اختيار الخصوصية والتفاعلات. 5) موافقة صريحة ثم إرسال ومتابعة الحالة.</p></div>"""
+<p>1) تسجيل الدخول الآمن عبر TikTok. 2) جلب إعدادات حسابك الحالية. 3) اختيار فيديو أصلي من جهازك. 4) اختيار الخصوصية والتفاعلات المتاحة لحسابك. 5) مراجعة الإعدادات والموافقة الصريحة. 6) الإرسال إلى TikTok ومتابعة حالة النشر.</p>
+<p>هذه خدمة موجهة لمنشئي المحتوى المخولين لربط حساباتهم ومشاركة محتواهم الأصلي بإرادتهم؛ لا يتم النشر تلقائيًا أو دون إجراء واضح من المستخدم.</p></div>"""
             return self.send_html(200,page("Trend Radar · Share to TikTok",body))
 
         if p.path=="/health":
-            return self.js(200,{"ok":True,"configured":configured(),"ui":"creator_facing_v2","audit_approved":audit_approved()})
+            return self.js(200,{"ok":True,"configured":configured(),"ui":"creator_facing_v3","audit_approved":audit_approved(),"scopes":cfg("TIKTOK_SCOPES") or DEFAULT_SCOPES})
+
+        if p.path=="/privacy":
+            body="""<div class="card"><h1>سياسة خصوصية تكامل TikTok</h1>
+<p>آخر تحديث: 22 سبتمبر 2026</p>
+<h2>ما الذي نصل إليه؟</h2>
+<p>عندما يربط المستخدم حساب TikTok، نستخدم فقط الصلاحيات التي وافق عليها لتحديد الحساب المخول وتنفيذ عملية نشر يطلبها المستخدم ومتابعة حالتها. لا نطلب كلمة مرور TikTok.</p>
+<h2>كيف نستخدم البيانات؟</h2>
+<p>نستخدم بيانات الحساب الأساسية ومعلومات Creator Info اللازمة لعرض الحساب المستهدف وخيارات الخصوصية والقيود الحالية، ثم نستخدم صلاحية Direct Post فقط بعد اختيار المستخدم للفيديو والإعدادات وإعطائه موافقة صريحة.</p>
+<h2>رموز التفويض والأمان</h2>
+<p>تتم معالجة access token وrefresh token على الخادم ولا نعرض قيمهما الصريحة للمتصفح. نحتفظ ببيانات التفويض فقط بقدر ما يلزم لتقديم الاتصال المصرح به وتشغيله.</p>
+<h2>المشاركة والبيع</h2>
+<p>لا نبيع بيانات مستخدمي TikTok ولا نستخدمها للإعلانات المخصصة أو التقييم الائتماني. لا ننقلها إلا بالقدر اللازم لتقديم الوظيفة التي طلبها المستخدم أو للامتثال لالتزام نظامي مشروع.</p>
+<h2>التحكم والحذف</h2>
+<p>يمكن للمستخدم إلغاء تفويض Trend Radar من TikTok. عند انتهاء أو إلغاء الاتصال نتوقف عن استخدام التفويض، ويمكن طلب حذف البيانات القابلة للحذف المرتبطة به عبر البريد أدناه.</p>
+<h2>المحتوى</h2>
+<p>الفيديو يختاره المستخدم من جهازه. لا نضيف علامة مائية أو رابطًا ترويجيًا إلى الفيديو قبل إرساله إلى TikTok.</p>
+<h2>التواصل</h2>
+<p><a href="mailto:trendradarar@gmail.com">trendradarar@gmail.com</a></p></div>"""
+            return self.send_html(200,page("TikTok Privacy · Trend Radar",body))
+
+        if p.path=="/terms":
+            body="""<div class="card"><h1>شروط استخدام تكامل TikTok</h1>
+<p>آخر تحديث: 22 سبتمبر 2026</p>
+<h2>نطاق الخدمة</h2>
+<p>يوفر Trend Radar واجهة لمنشئي المحتوى المخولين لربط حساب TikTok واختيار فيديو أصلي ومراجعة إعدادات النشر ثم إرساله بإجراء صريح من المستخدم.</p>
+<h2>التفويض والتحكم</h2>
+<p>يقر المستخدم بأنه مخول بربط الحساب المستهدف. يبقى المستخدم صاحب القرار في منح الصلاحيات أو إلغائها واختيار الفيديو والوصف والخصوصية وإعدادات التفاعل.</p>
+<h2>المحتوى والحقوق</h2>
+<p>يجب ألا يرسل المستخدم إلا محتوى يملك حق نشره، وأن يلتزم بحقوق الملكية الفكرية وسياسات TikTok والأنظمة المعمول بها.</p>
+<h2>لا نشر صامت</h2>
+<p>لا يبدأ Direct Post إلا بعد اختيار المستخدم للإعدادات وتأكيد الموافقة الصريحة والضغط على زر الإرسال.</p>
+<h2>الخصوصية</h2>
+<p>توضح <a href="/privacy">سياسة خصوصية TikTok</a> كيفية استخدام بيانات التفويض والمعلومات التشغيلية المرتبطة بالتكامل.</p>
+<h2>التواصل</h2>
+<p><a href="mailto:trendradarar@gmail.com">trendradarar@gmail.com</a></p></div>"""
+            return self.send_html(200,page("TikTok Terms · Trend Radar",body))
 
         if p.path=="/auth/tiktok/start":
             return self.start_auth(q)
