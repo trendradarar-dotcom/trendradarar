@@ -262,3 +262,38 @@ Current gate state:
 - Demo 2 (Direct Post): NEEDS SIZE REDUCTION / FINAL VISUAL REVIEW
 - Submit for review: HOLD only until Demo 2 is under 50 MB and visually confirmed
 - TIKTOK_AUDIT_APPROVED: false/unset
+
+
+## Final R5 closure — 2026-09-23
+
+The remaining Direct Post demo blocker is now CLOSED.
+
+Review-ready Direct Post clip:
+- Filename: TrendRadar_TikTok_Review_Demo_DirectPost_20260923.mp4
+- Duration: 21.500000 seconds
+- Size: 513,874 bytes
+- SHA-256: 7e7c495919396061891536ec013ab94a513a3044a63ec766b15ea8206a123180
+- Source trim window: 243.0s through 264.5s of the owner-provided raw recording
+- Visual verification: SELF_ONLY -> explicit Direct Post action -> PUBLISH_COMPLETE / error.code=ok
+- Editing integrity: trim/compression only; no simulated UI or fabricated provider result
+- Evidence file: review/tiktok/TIKTOK_DIRECT_POST_DEMO_EVIDENCE_20260923.md
+
+Companion Login + Draft demo remains READY:
+- TrendRadar_TikTok_Review_Demo_Login_Draft.mp4
+- SHA-256: 4467cda68dee4ba76641f0a096e883b10db286e34a61c5d111e99789ee645c3a
+
+### Final review gate
+- R1 domain alignment: CLOSED
+- R2 scope configuration (user.info.basic + video.publish + video.upload): CLOSED and intentional
+- R3 TikTok Privacy/Terms: CLOSED
+- R4 creator-facing intended use: CLOSED
+- R5 review demos: CLOSED
+- Login Kit evidence: PASS
+- user.info.basic evidence: PASS
+- video.upload evidence: PASS
+- video.publish evidence: PASS
+- TikTok App Review package: READY FOR EXTERNAL SUBMIT
+- TIKTOK_AUDIT_APPROVED: false/unset
+- Public TikTok publishing before documented approval: FORBIDDEN
+
+No successful test or evidence should be repeated merely for review preparation.
