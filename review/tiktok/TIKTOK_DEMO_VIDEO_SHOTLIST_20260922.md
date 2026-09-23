@@ -46,3 +46,24 @@ Purpose: record one truthful, continuous demonstration of the actual Sandbox int
 - Owner-only/private-tool framing.
 - A different domain than the Website URL supplied to TikTok review.
 - video.upload/draft functionality unless that scope is intentionally kept and fully demonstrated.
+
+
+## Final evidence package — 2026-09-23
+
+The review evidence is now intentionally split into two truthful creator-facing videos rather than fabricating a single continuous recording:
+
+### Demo 1 — Login + Draft
+- TrendRadar_TikTok_Review_Demo_Login_Draft.mp4
+- 37.233333 seconds
+- SHA-256: 4467cda68dee4ba76641f0a096e883b10db286e34a61c5d111e99789ee645c3a
+- Covers Login Kit, consent/redirect, connected creator identity, user.info.basic, original MP4 selection, explicit consent, and video.upload Upload-to-Inbox Draft.
+
+### Demo 2 — Direct Post
+- TrendRadar_TikTok_Review_Demo_DirectPost_20260923.mp4
+- 21.500000 seconds
+- 513,874 bytes
+- SHA-256: 7e7c495919396061891536ec013ab94a513a3044a63ec766b15ea8206a123180
+- Covers the live creator-facing Direct Post section with SELF_ONLY and final PUBLISH_COMPLETE / error.code=ok.
+- No simulated UI or fabricated provider result was added.
+
+Both videos use the actual Trend Radar review integration. Public visibility remains forbidden before TikTok approval.
