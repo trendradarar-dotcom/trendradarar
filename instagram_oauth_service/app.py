@@ -19,6 +19,7 @@ APP_ID = os.getenv("INSTAGRAM_APP_ID", "").strip()
 APP_SECRET = os.getenv("INSTAGRAM_APP_SECRET", "").strip()
 REDIRECT_URI = os.getenv("INSTAGRAM_REDIRECT_URI", "").strip()
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
+SESSION_SECRET = os.getenv("SESSION_SECRET", "").strip()
 SCOPES = (
     "instagram_business_basic",
     "instagram_business_content_publish",
@@ -28,7 +29,7 @@ PUBLIC_PUBLISH_AUTHORIZED = os.getenv(
 ).lower() == "true"
 
 app = Flask(__name__)
-app.secret_key = os.getenv("SESSION_SECRET") or secrets.token_urlsafe(48)
+app.secret_key = SESSION_SECRET or secrets.token_urlsafe(48)
 app.config["MAX_CONTENT_LENGTH"] = 120 * 1024 * 1024
 
 TOKEN_STORE = {}
@@ -39,7 +40,7 @@ MEDIA_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _configured():
-    return bool(APP_ID and APP_SECRET and REDIRECT_URI)
+    return bool(APP_ID and APP_SECRET and REDIRECT_URI and SESSION_SECRET)
 
 
 def _sid():
@@ -194,8 +195,8 @@ def instagram_start():
         "response_type": "code",
         "scope": ",".join(SCOPES),
         "state": state,
-        "enable_fb_login": "0",
-        "force_authentication": "1",
+        "enable_fb_login": "false",
+        "force_reauth": "true",
     }
     return redirect("https://www.instagram.com/oauth/authorize?" + urlencode(params))
 
@@ -262,14 +263,33 @@ def instagram_callback():
     except Exception:
         long_payload = {"raw": long_response.text[:1000]}
 
-    token = long_payload.get("access_token") or short_token
+    if long_response.status_code >= 400 or not long_payload.get("access_token"):
+        safe_error = long_payload.get("error") if isinstance(long_payload, dict) else None
+        if isinstance(safe_error, dict):
+            safe_error = {
+                "type": safe_error.get("type"),
+                "code": safe_error.get("code"),
+                "message": safe_error.get("message"),
+            }
+        else:
+            safe_error = {"message": "Long-lived token exchange failed"}
+        return jsonify(
+            {
+                "ok": False,
+                "stage": "LONG_TOKEN_EXCHANGE",
+                "http": long_response.status_code,
+                "provider_error": safe_error,
+            }
+        ), 502
+
+    token = long_payload["access_token"]
     expires_in = long_payload.get("expires_in")
 
     profile_http, profile = _graph(
         "GET",
         "me",
         token,
-        params={"fields": "id,username,account_type"},
+        params={"fields": "id,user_id,username,account_type"},
     )
     if profile_http >= 400:
         return jsonify(
@@ -281,12 +301,34 @@ def instagram_callback():
             }
         ), 502
 
-    user_id = profile.get("id") or user_id
+    app_scoped_user_id = profile.get("id") or user_id
+    professional_user_id = profile.get("user_id")
+    account_type = str(profile.get("account_type") or "").strip()
+    normalized_account_type = account_type.replace(" ", "_").upper()
+    if not professional_user_id:
+        return jsonify(
+            {
+                "ok": False,
+                "stage": "PROFILE_VERIFY",
+                "error": "MISSING_PROFESSIONAL_USER_ID",
+            }
+        ), 502
+    if normalized_account_type not in {"BUSINESS", "MEDIA_CREATOR"}:
+        return jsonify(
+            {
+                "ok": False,
+                "stage": "PROFILE_VERIFY",
+                "error": "INSTAGRAM_PROFESSIONAL_ACCOUNT_REQUIRED",
+                "account_type": account_type or None,
+            }
+        ), 422
+
     rec = {
         "access_token": token,
-        "user_id": user_id,
+        "user_id": professional_user_id,
+        "app_scoped_user_id": app_scoped_user_id,
         "username": profile.get("username"),
-        "account_type": profile.get("account_type"),
+        "account_type": account_type,
         "expires_in": expires_in,
         "connected_at": int(time.time()),
     }
