@@ -144,3 +144,12 @@ PUBLIC_INSTAGRAM_PUBLISHING = HOLD
 META_REQUIRED_ACTIONS = NONE
 PORTAL_EVIDENCE = Required actions page shows no actions currently required
 NEXT_PORTAL_ACTION = Open Use Cases and configure/test the Instagram use case
+
+
+## Meta permissions progress — 2026-09-24
+
+INSTAGRAM_BUSINESS_BASIC = READY_FOR_TEST
+INSTAGRAM_BUSINESS_CONTENT_PUBLISH = READY_FOR_TEST
+PORTAL_EVIDENCE = Both permissions show Ready for testing in Meta dashboard
+IMPLEMENTATION_REQUESTED_SCOPES = instagram_business_basic, instagram_business_content_publish
+PUBLIC_INSTAGRAM_PUBLISHING = HOLD
