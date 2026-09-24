@@ -1,69 +1,76 @@
-# TikTok App Review Demo Video — Recording Shot List
+# TikTok App Review Demo Evidence — Final Shot/Evidence Map
 
-Purpose: record one truthful, continuous demonstration of the actual Sandbox integration for TikTok App Review.
+Project: TrendHunter / Trend Radar
+Branch: tiktok-production-review-20260922
+Governance: ALI-PROGRAMMER-GOVERNANCE-GENERAL-1.5.0 + ALI_PRO
 
-## Before recording
-- Use the final review domain, not the temporary onrender.com hostname, if the Production Website URL will be a Trend Radar custom domain.
-- Keep TikTok test account private while the client is unaudited.
-- Use a valid original MP4 meeting TikTok video requirements.
-- Ensure no secrets, client secret, access token, refresh token, environment variables, browser password manager contents, or unrelated private tabs are visible.
-- Do not use the server-side diagnostic private-test page as the primary review demo; show the creator-facing integration users will actually use.
+The required review evidence is split truthfully across two real creator-facing recordings. Do not re-record successful evidence and do not represent either clip as showing steps it does not contain.
 
-## Recording sequence
-1. Show the browser address bar with the exact Trend Radar review website domain.
-2. Show the page title/brand and visible Privacy Policy and Terms links.
-3. Click the TikTok connection button.
-4. Show the official TikTok authorization screen.
-5. Show the requested permissions and approve them.
-6. Show the redirect back to Trend Radar.
-7. Show the connected creator nickname/username.
-8. Show the creator-reported maximum video duration and posting controls.
-9. Choose an original MP4 from the device.
-10. Show the in-page video preview.
-11. Show that title/caption is editable and is not forced.
-12. Open privacy options returned for the creator and choose SELF_ONLY for Sandbox.
-13. Show comments, Duet and Stitch controls; do not enable options unavailable to the creator.
-14. Leave commercial content unchecked for the current non-commercial review test.
-15. Check the explicit consent statement only after reviewing the settings.
-16. Click Send to TikTok once.
-17. Show that the page reports upload accepted / processing.
-18. Show final provider status PUBLISH_COMPLETE if available in the same recording; otherwise show the same publish transaction after a normal status refresh.
-19. End without changing content visibility to public.
+## Demo 1 — Login Kit + Upload-as-Draft
 
-## What this video proves
-- Real Login Kit flow.
-- user.info.basic use.
-- Real Creator Info use.
-- Creator-facing posting UX.
-- video.publish Direct Post.
-- Explicit user control and consent.
-- Sandbox SELF_ONLY enforcement.
-- Real provider status handling.
+Filename: TrendRadar_TikTok_Review_Demo_Login_Draft.mp4
+Duration: 37.233333 seconds
+SHA-256: 4467cda68dee4ba76641f0a096e883b10db286e34a61c5d111e99789ee645c3a
 
-## Do not include
-- Fake/mock provider responses.
-- Multiple unnecessary posting attempts.
-- Owner-only/private-tool framing.
-- A different domain than the Website URL supplied to TikTok review.
-- video.upload/draft functionality unless that scope is intentionally kept and fully demonstrated.
+Verified purpose:
+- final review domain / creator-facing flow
+- real TikTok Login Kit authorization and return
+- connected creator identity / user.info.basic use
+- local original MP4 selection
+- explicit creator action/consent
+- separate Upload-as-Draft workflow / video.upload
+- TikTok processing response
 
+Matching Render evidence:
+- GET /auth/tiktok/start -> 302
+- OAuth callback authorized scopes user.info.basic, video.publish, video.upload
+- GET /share -> 200
+- Draft init -> HTTP 200 / code=ok
+- Draft binary upload -> HTTP 201
+- POST /api/upload-draft -> HTTP 201
 
-## Final evidence package — 2026-09-23
+This clip MUST NOT be described as demonstrating Direct Post.
 
-The review evidence is now intentionally split into two truthful creator-facing videos rather than fabricating a single continuous recording:
+## Demo 2 — Direct Post
 
-### Demo 1 — Login + Draft
-- TrendRadar_TikTok_Review_Demo_Login_Draft.mp4
-- 37.233333 seconds
-- SHA-256: 4467cda68dee4ba76641f0a096e883b10db286e34a61c5d111e99789ee645c3a
-- Covers Login Kit, consent/redirect, connected creator identity, user.info.basic, original MP4 selection, explicit consent, and video.upload Upload-to-Inbox Draft.
+Filename: TrendRadar_TikTok_Review_Demo_DirectPost_20260923.mp4
+Duration: 21.5 seconds
+Size: 513874 bytes
+SHA-256: 7e7c495919396061891536ec013ab94a513a3044a63ec766b15ea8206a123180
 
-### Demo 2 — Direct Post
-- TrendRadar_TikTok_Review_Demo_DirectPost_20260923.mp4
-- 21.500000 seconds
-- 513,874 bytes
-- SHA-256: 7e7c495919396061891536ec013ab94a513a3044a63ec766b15ea8206a123180
-- Covers the live creator-facing Direct Post section with SELF_ONLY and final PUBLISH_COMPLETE / error.code=ok.
-- No simulated UI or fabricated provider result was added.
+Verified visible sequence:
+1. SELF_ONLY is shown for the unaudited/private-safe operation.
+2. User invokes the real Direct Post action to TikTok.
+3. TikTok status reaches PUBLISH_COMPLETE.
+4. Provider error.code is ok.
 
-Both videos use the actual Trend Radar review integration. Public visibility remains forbidden before TikTok approval.
+Matching live Render evidence for the same Direct Post operation:
+- POST /api/post -> HTTP 201
+- Direct Post init -> HTTP 200 / provider code=ok
+- Binary upload -> HTTP 201
+- Final status -> PUBLISH_COMPLETE
+- Privacy -> SELF_ONLY
+
+Editing provenance:
+- truthful trim/compression of the raw Direct Post recording
+- no simulated TikTok UI
+- no fabricated provider result
+- no synthetic replacement of the creator-facing interface
+
+## Scope-to-evidence binding
+
+| Product/scope | Evidence | Status |
+|---|---|---|
+| Login Kit | Demo 1 + OAuth/Render trace | PASS |
+| user.info.basic | Demo 1 connected creator identity | PASS |
+| video.upload | Demo 1 Upload-as-Draft + 200/201 Render trace | PASS |
+| video.publish | Demo 2 Direct Post + 201/200/201/PUBLISH_COMPLETE trace | PASS |
+
+## Submission safety constraints
+
+- TIKTOK_AUDIT_APPROVED must remain false/unset until documented TikTok approval.
+- No public posting is authorized.
+- SELF_ONLY evidence is intentional while unaudited.
+- Do not add mock/simulated provider responses.
+- Do not repeat successful posting/upload tests merely to create redundant evidence.
+- Final external TikTok App Review submission is a human/external portal gate if the portal requires owner interaction.
