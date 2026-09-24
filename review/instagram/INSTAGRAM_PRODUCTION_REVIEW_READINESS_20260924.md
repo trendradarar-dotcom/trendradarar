@@ -137,3 +137,10 @@ INSTAGRAM_MANAGE_MESSAGING_CONTENT_USE_CASE = ADDED_IN_META_UI
 META_DASHBOARD_ONBOARDING_MODAL = PRESENT
 NEXT_PORTAL_ACTION = Close onboarding modal, then inspect required actions for the Instagram use case
 PUBLIC_INSTAGRAM_PUBLISHING = HOLD
+
+
+## Meta required-actions check — 2026-09-24
+
+META_REQUIRED_ACTIONS = NONE
+PORTAL_EVIDENCE = Required actions page shows no actions currently required
+NEXT_PORTAL_ACTION = Open Use Cases and configure/test the Instagram use case
