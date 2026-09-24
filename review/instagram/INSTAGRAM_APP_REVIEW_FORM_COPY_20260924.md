@@ -27,12 +27,12 @@ Used for the user-initiated Reels publishing workflow:
 - Deauthorization and data-deletion endpoints are provided.
 
 ## Review website endpoints
-Website: [set after isolated Render service is created]
-OAuth redirect: [set after isolated Render service is created]
-Privacy: [set after isolated Render service is created]/privacy
-Terms: [set after isolated Render service is created]/terms
-Data deletion: [set after isolated Render service is created]/data-deletion
-Deauthorize callback: [set after isolated Render service is created]/deauthorize
+Website: https://trendradar-instagram-oauth.onrender.com
+OAuth redirect: https://trendradar-instagram-oauth.onrender.com/auth/instagram/callback
+Privacy: https://trendradar-instagram-oauth.onrender.com/privacy
+Terms: https://trendradar-instagram-oauth.onrender.com/terms
+Data deletion: https://trendradar-instagram-oauth.onrender.com/data-deletion
+Deauthorize callback: https://trendradar-instagram-oauth.onrender.com/deauthorize
 
 ## Review evidence still required
 - real Meta Developer app configuration;
