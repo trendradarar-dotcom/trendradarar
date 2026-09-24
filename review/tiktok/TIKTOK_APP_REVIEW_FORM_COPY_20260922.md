@@ -1,73 +1,80 @@
 # TikTok App Review — Form Copy
 
-Use only after the Production configuration matches the statements below.
+Use only for the isolated Trend Radar TikTok review configuration.
 
 ## App name
 Trend Radar AR
 
 ## App description
-Trend Radar is a creator-facing web service for discovering rising trends and preparing original short-form content. Authorized creators can connect their TikTok account, review the target account and current posting options, select an original video from their device, choose privacy and interaction settings, give explicit consent, and share the video to their TikTok profile through TikTok's Content Posting API.
+Trend Radar is a creator-facing web service for discovering rising trends and preparing original short-form content. Authorized creators can connect their TikTok account, confirm the connected creator identity, select an original video from their device, and intentionally either publish it through Direct Post or upload it to TikTok as a draft. Posting/upload is always user-initiated and consent-gated.
 
-## Product: Login Kit
-Trend Radar uses TikTok Login Kit for secure account authorization. The user is redirected to TikTok to sign in and grant requested permissions. After authorization, Trend Radar validates the OAuth state, exchanges the authorization code server-side, and returns the user to the posting interface. Tokens are handled server-side and are not exposed in browser responses.
+## Website URL
+https://share.trendradar.com.co/
 
-## Scope: user.info.basic
-Trend Radar uses user.info.basic to identify the connected TikTok creator in the posting interface. The creator's current nickname and account identity are shown so the user can confirm which TikTok account will receive the content.
+## Login Kit
+Trend Radar uses TikTok Login Kit for secure account authorization. OAuth state is validated and authorization-code exchange occurs server-side. Tokens remain server-side and are not exposed in browser responses.
 
-## Product: Content Posting API — Direct Post
-Trend Radar uses the Direct Post flow to let creators intentionally share their own original videos to their TikTok account. Before sending a video, Trend Radar queries TikTok Creator Info, displays the current creator identity and allowed privacy options, checks creator restrictions and video duration, lets the user edit the caption, and requires explicit consent. No video is sent until the user chooses the settings and confirms the upload. Trend Radar then initializes Direct Post, uploads the selected MP4, and checks the publishing status so the user can see the result.
+## user.info.basic
+Used to display the connected TikTok creator identity so the user can confirm the destination account. Demo 1 demonstrates this after OAuth return.
 
-## Scope: video.publish
-video.publish is required only for the user-initiated Direct Post operation described above. Trend Radar does not silently publish in the background. The user selects the video and posting settings and gives explicit consent before the upload begins.
+## Content Posting API — Direct Post / video.publish
+The creator selects an original MP4, reviews creator-derived privacy and interaction options, chooses settings, and explicitly consents before sending. Trend Radar queries Creator Info, initializes Direct Post, uploads the binary, and polls TikTok publishing status. Demo 2 shows SELF_ONLY and ends with PUBLISH_COMPLETE / error.code=ok.
 
-## Scope: video.upload
+## Content Posting API — Upload to TikTok / video.upload
+Trend Radar also offers a separate creator-facing Upload-as-Draft action. The user explicitly selects the file and initiates the draft upload; it is not a background upload. Demo 1 demonstrates this capability end-to-end.
 
-Trend Radar intentionally also provides a separate creator-facing Upload-to-TikTok draft workflow. The user selects an original MP4, reviews the connected creator account, gives explicit consent, and initiates the upload. The app initializes the TikTok draft-upload flow and transfers the media to TikTok so the creator can continue from TikTok Inbox. This capability is demonstrated in the separate Login + Draft review video.
+## Requested scopes
+- user.info.basic — connected creator identity.
+- video.publish — user-initiated Direct Post.
+- video.upload — user-initiated Upload-as-Draft workflow.
 
-Production review therefore intentionally requests all three scopes:
-- user.info.basic
-- video.publish
-- video.upload
+All three scopes correspond to implemented and demonstrated creator-facing functionality.
 
-## Review notes
-The integration has been tested in TikTok Sandbox. The Sandbox Direct Post test completed successfully with SELF_ONLY visibility and final TikTok status PUBLISH_COMPLETE. The unaudited integration remains restricted to private testing. Public posting will not be enabled until TikTok approval/audit is documented.
+## Review evidence
+
+### Demo 1 — Login + Draft
+Filename: TrendRadar_TikTok_Review_Demo_Login_Draft.mp4
+Duration: 37.233333 seconds
+SHA-256: 4467cda68dee4ba76641f0a096e883b10db286e34a61c5d111e99789ee645c3a
+
+Demonstrates Login Kit, OAuth consent/return, user.info.basic creator identity, original MP4 selection, explicit consent, Upload-as-Draft action, and TikTok processing response.
+
+Matching Render evidence:
+- GET /auth/tiktok/start -> 302
+- OAuth callback authorized user.info.basic, video.publish, video.upload
+- GET /share -> 200
+- Draft init -> HTTP 200 / code=ok
+- Binary upload -> HTTP 201
+- POST /api/upload-draft -> HTTP 201
+
+### Demo 2 — Direct Post
+Filename: TrendRadar_TikTok_Review_Demo_DirectPost_20260923.mp4
+Duration: 21.5 seconds
+Size: 513874 bytes
+SHA-256: 7e7c495919396061891536ec013ab94a513a3044a63ec766b15ea8206a123180
+
+Visual verification: the real creator-facing evidence shows SELF_ONLY, the Direct Post action, then TikTok status=PUBLISH_COMPLETE and error.code=ok. It is a truthful trim/compression of the raw recording; no simulated UI or fabricated provider result was added.
+
+Matching live Render transaction evidence:
+- POST /api/post -> HTTP 201
+- Direct Post init -> HTTP 200 / provider code=ok
+- Binary upload -> HTTP 201
+- Final TikTok status -> PUBLISH_COMPLETE
+- Privacy -> SELF_ONLY
 
 ## Reviewer test flow
-1. Open the supplied Trend Radar review website.
-2. Click the TikTok account connection button.
-3. Authorize the requested TikTok permissions.
-4. Confirm the creator nickname/account shown after redirect.
-5. Choose an MP4 video from the device.
-6. Preview the selected video.
-7. Choose an allowed privacy option. In Sandbox/unaudited testing use SELF_ONLY.
-8. Optionally enter/edit the caption.
-9. Review comment/Duet/Stitch settings.
-10. Confirm the explicit consent checkbox.
-11. Click the single Share/Send to TikTok button.
-12. Observe the status update until TikTok returns the final publishing result.
+1. Open https://share.trendradar.com.co/.
+2. Connect a TikTok account through Login Kit and approve the requested scopes.
+3. Confirm the connected creator identity after return.
+4. Select an original MP4.
+5. For Direct Post, review creator-derived posting options, use SELF_ONLY while unaudited, give explicit consent, and click the Direct Post action once; observe status through PUBLISH_COMPLETE.
+6. For Upload-to-TikTok draft, select the file, give explicit consent, and invoke the separate Upload-as-Draft action.
 
-## Data handling summary for reviewers
-- Client secret is server-side only.
-- User access/refresh tokens are server-side only.
-- Browser responses do not expose token plaintext.
+## Data handling / safety summary
+- Client secret and access/refresh tokens are server-side only.
 - OAuth state/CSRF validation is used.
-- Posting is user-initiated and consent-gated.
-- Trend Radar does not add a watermark, logo, promotional link, or forced promotional text to the uploaded video.
-
-
-## Final demo package — 2026-09-23
-
-Demo 1 — Login Kit + Upload-to-Inbox Draft:
-- Filename: TrendRadar_TikTok_Review_Demo_Login_Draft.mp4
-- Duration: 37.233333 seconds
-- SHA-256: 4467cda68dee4ba76641f0a096e883b10db286e34a61c5d111e99789ee645c3a
-- Demonstrates Login Kit, user.info.basic, creator-facing consent, and video.upload draft flow.
-
-Demo 2 — Direct Post:
-- Filename: TrendRadar_TikTok_Review_Demo_DirectPost_20260923.mp4
-- Duration: 21.500000 seconds
-- Size: 513,874 bytes
-- SHA-256: 7e7c495919396061891536ec013ab94a513a3044a63ec766b15ea8206a123180
-- Demonstrates SELF_ONLY, explicit Direct Post action, and final PUBLISH_COMPLETE with provider error.code=ok.
-
-The unaudited integration remains restricted to review/private testing. Public posting is not enabled before documented TikTok approval.
+- Publishing/upload is user-initiated and consent-gated.
+- No watermark, logo, promotional link, forced caption, simulated TikTok UI, or fabricated provider result is added.
+- Sandbox/unaudited Direct Post evidence uses SELF_ONLY.
+- TIKTOK_AUDIT_APPROVED remains false/unset until documented TikTok approval.
+- No public posting is authorized before that approval.
