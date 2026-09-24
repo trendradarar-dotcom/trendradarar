@@ -297,3 +297,49 @@ Companion Login + Draft demo remains READY:
 - Public TikTok publishing before documented approval: FORBIDDEN
 
 No successful test or evidence should be repeated merely for review preparation.
+
+
+## Final R5 reconciliation — 2026-09-25
+
+This section supersedes the earlier R5 HOLD statements where they conflict with the completed evidence below.
+
+### Demo evidence completed
+
+Demo 1 — Login + Draft:
+- Filename: TrendRadar_TikTok_Review_Demo_Login_Draft.mp4
+- Duration: 37.233333 seconds
+- SHA-256: 4467cda68dee4ba76641f0a096e883b10db286e34a61c5d111e99789ee645c3a
+- Bound capabilities: Login Kit + user.info.basic + video.upload
+- Matching Render evidence: OAuth start/return; authorized three-scope set; draft init HTTP 200/code=ok; binary upload HTTP 201; POST /api/upload-draft HTTP 201.
+
+Demo 2 — Direct Post:
+- Filename: TrendRadar_TikTok_Review_Demo_DirectPost_20260923.mp4
+- Duration: 21.5 seconds
+- Size: 513874 bytes
+- SHA-256: 7e7c495919396061891536ec013ab94a513a3044a63ec766b15ea8206a123180
+- Visual verification: SELF_ONLY -> real Direct Post action -> TikTok status PUBLISH_COMPLETE -> error.code=ok.
+- Editing provenance: truthful trim/compression only; no simulated UI or fabricated provider result.
+- Matching live Render evidence: POST /api/post HTTP 201; Direct Post init HTTP 200/provider code=ok; binary upload HTTP 201; final PUBLISH_COMPLETE.
+
+### Final capability matrix
+- Login Kit: PASS
+- user.info.basic: PASS
+- video.upload: PASS
+- video.publish: PASS
+- R1 final review domain: CLOSED
+- R2 intentional three-scope configuration: CLOSED
+- R3 TikTok-specific Privacy/Terms: CLOSED
+- R4 creator-facing intended use: CLOSED
+- R5 two-demo evidence: CLOSED
+
+### Production-review gate
+INTERNAL_REVIEW_EVIDENCE = READY
+SUBMIT_FOR_REVIEW = EXTERNAL_HUMAN_GATE
+
+No additional recording or repeat of successful API tests is required by this evidence package.
+
+Safety state remains mandatory:
+- TIKTOK_AUDIT_APPROVED = false/unset
+- PUBLIC_POSTING_AUTHORITY = NOT GRANTED
+- no public publication before documented TikTok approval
+- no merge/public-site mutation is implied by this review-evidence update
