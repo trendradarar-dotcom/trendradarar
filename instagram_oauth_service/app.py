@@ -21,6 +21,12 @@ REDIRECT_URI = os.getenv("INSTAGRAM_REDIRECT_URI", "").strip()
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
 SESSION_SECRET = os.getenv("SESSION_SECRET", "").strip()
 EXPECTED_USERNAME = os.getenv("INSTAGRAM_EXPECTED_USERNAME", "").strip().lstrip("@").lower()
+PUBLIC_OAUTH_REDIRECT_URI = os.getenv(
+    "INSTAGRAM_PUBLIC_OAUTH_REDIRECT_URI", REDIRECT_URI
+).strip()
+OAUTH_PUBLIC_ORIGIN = os.getenv(
+    "INSTAGRAM_OAUTH_PUBLIC_ORIGIN", "https://trendradar.com.co"
+).strip().rstrip("/")
 SCOPES = (
     "instagram_business_basic",
     "instagram_business_content_publish",
@@ -96,6 +102,171 @@ def _b64url_decode(value):
     return base64.urlsafe_b64decode(value.encode("utf-8"))
 
 
+def _b64url_encode(value):
+    return base64.urlsafe_b64encode(value).decode("utf-8").rstrip("=")
+
+
+def _make_public_oauth_state():
+    payload = {
+        "aud": "trendradar-instagram-public-oauth",
+        "iat": int(time.time()),
+        "nonce": secrets.token_urlsafe(18),
+        "redirect_uri": PUBLIC_OAUTH_REDIRECT_URI,
+    }
+    encoded_payload = _b64url_encode(
+        json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    )
+    signature = hmac.new(
+        SESSION_SECRET.encode("utf-8"),
+        encoded_payload.encode("utf-8"),
+        hashlib.sha256,
+    ).digest()
+    return f"{encoded_payload}.{_b64url_encode(signature)}"
+
+
+def _verify_public_oauth_state(state, max_age_seconds=900):
+    if not SESSION_SECRET or not state or "." not in state:
+        return None
+    encoded_payload, encoded_sig = state.split(".", 1)
+    try:
+        supplied_sig = _b64url_decode(encoded_sig)
+        expected_sig = hmac.new(
+            SESSION_SECRET.encode("utf-8"),
+            encoded_payload.encode("utf-8"),
+            hashlib.sha256,
+        ).digest()
+        if not hmac.compare_digest(supplied_sig, expected_sig):
+            return None
+        payload = json.loads(_b64url_decode(encoded_payload).decode("utf-8"))
+        now = int(time.time())
+        issued_at = int(payload.get("iat", 0))
+        if payload.get("aud") != "trendradar-instagram-public-oauth":
+            return None
+        if payload.get("redirect_uri") != PUBLIC_OAUTH_REDIRECT_URI:
+            return None
+        if issued_at <= 0 or now - issued_at < 0 or now - issued_at > max_age_seconds:
+            return None
+        return payload
+    except Exception:
+        return None
+
+
+def _complete_oauth(code, redirect_uri):
+    token_response = requests.post(
+        "https://api.instagram.com/oauth/access_token",
+        data={
+            "client_id": APP_ID,
+            "client_secret": APP_SECRET,
+            "grant_type": "authorization_code",
+            "redirect_uri": redirect_uri,
+            "code": code,
+        },
+        timeout=45,
+    )
+    try:
+        token_payload = token_response.json()
+    except Exception:
+        token_payload = {}
+    if token_response.status_code >= 400 or not token_payload.get("access_token"):
+        provider_error = token_payload.get("error_message") or token_payload.get("error_type")
+        return 502, {
+            "ok": False,
+            "stage": "SHORT_TOKEN_EXCHANGE",
+            "http": token_response.status_code,
+            "provider_error": provider_error or "Instagram short-token exchange failed",
+        }
+
+    short_token = token_payload["access_token"]
+    app_scoped_user_id = token_payload.get("user_id")
+
+    long_response = requests.get(
+        "https://graph.instagram.com/access_token",
+        params={
+            "grant_type": "ig_exchange_token",
+            "client_secret": APP_SECRET,
+            "access_token": short_token,
+        },
+        timeout=45,
+    )
+    try:
+        long_payload = long_response.json()
+    except Exception:
+        long_payload = {}
+
+    if long_response.status_code >= 400 or not long_payload.get("access_token"):
+        safe_error = long_payload.get("error") if isinstance(long_payload, dict) else None
+        if isinstance(safe_error, dict):
+            safe_error = {
+                "type": safe_error.get("type"),
+                "code": safe_error.get("code"),
+                "message": safe_error.get("message"),
+            }
+        else:
+            safe_error = {"message": "Long-lived token exchange failed"}
+        return 502, {
+            "ok": False,
+            "stage": "LONG_TOKEN_EXCHANGE",
+            "http": long_response.status_code,
+            "provider_error": safe_error,
+        }
+
+    token = long_payload["access_token"]
+    expires_in = long_payload.get("expires_in")
+
+    profile_http, profile = _graph(
+        "GET",
+        "me",
+        token,
+        params={"fields": "id,user_id,username,account_type"},
+    )
+    if profile_http >= 400:
+        provider_error = profile.get("error") if isinstance(profile, dict) else None
+        return 502, {
+            "ok": False,
+            "stage": "PROFILE_VERIFY",
+            "http": profile_http,
+            "provider_error": provider_error,
+        }
+
+    app_scoped_user_id = profile.get("id") or app_scoped_user_id
+    professional_user_id = profile.get("user_id")
+    account_type = str(profile.get("account_type") or "").strip()
+    normalized_account_type = account_type.replace(" ", "_").upper()
+    actual_username = str(profile.get("username") or "").strip().lstrip("@").lower()
+
+    if EXPECTED_USERNAME and actual_username != EXPECTED_USERNAME:
+        return 403, {
+            "ok": False,
+            "stage": "PROFILE_VERIFY",
+            "error": "INSTAGRAM_ACCOUNT_MISMATCH",
+            "expected_username": EXPECTED_USERNAME,
+            "actual_username": actual_username or None,
+        }
+    if not professional_user_id:
+        return 502, {
+            "ok": False,
+            "stage": "PROFILE_VERIFY",
+            "error": "MISSING_PROFESSIONAL_USER_ID",
+        }
+    if normalized_account_type not in {"BUSINESS", "MEDIA_CREATOR"}:
+        return 422, {
+            "ok": False,
+            "stage": "PROFILE_VERIFY",
+            "error": "INSTAGRAM_PROFESSIONAL_ACCOUNT_REQUIRED",
+            "account_type": account_type or None,
+        }
+
+    return 200, {
+        "access_token": token,
+        "user_id": professional_user_id,
+        "app_scoped_user_id": app_scoped_user_id,
+        "username": profile.get("username"),
+        "account_type": account_type,
+        "expires_in": expires_in,
+        "connected_at": int(time.time()),
+    }
+
+
 def _parse_signed_request(signed_request):
     if not APP_SECRET or not signed_request or "." not in signed_request:
         return None
@@ -133,6 +304,12 @@ def security_headers(response):
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    origin = request.headers.get("Origin", "").rstrip("/")
+    if request.path.startswith("/api/public-oauth/") and origin == OAUTH_PUBLIC_ORIGIN:
+        response.headers["Access-Control-Allow-Origin"] = OAUTH_PUBLIC_ORIGIN
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        response.headers["Vary"] = "Origin"
     return response
 
 
@@ -171,6 +348,70 @@ small{{color:#555}}
 <p><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/data-deletion">Data deletion</a></p>
 <small>Instagram Professional (Business or Creator) accounts only.</small>
 </body></html>"""
+
+
+@app.route("/api/public-oauth/start", methods=["GET", "OPTIONS"])
+def public_oauth_start():
+    if request.method == "OPTIONS":
+        return ("", 204)
+    if not _configured() or not PUBLIC_OAUTH_REDIRECT_URI:
+        return jsonify({"ok": False, "error": "META_APP_NOT_CONFIGURED"}), 503
+    state = _make_public_oauth_state()
+    params = {
+        "client_id": APP_ID,
+        "redirect_uri": PUBLIC_OAUTH_REDIRECT_URI,
+        "response_type": "code",
+        "scope": ",".join(SCOPES),
+        "state": state,
+        "enable_fb_login": "false",
+    }
+    return jsonify(
+        {
+            "ok": True,
+            "authorization_url": "https://www.instagram.com/oauth/authorize?" + urlencode(params),
+        }
+    )
+
+
+@app.route("/api/public-oauth/callback", methods=["POST", "OPTIONS"])
+def public_oauth_callback():
+    if request.method == "OPTIONS":
+        return ("", 204)
+    payload = request.get_json(silent=True) or {}
+    if payload.get("error"):
+        return jsonify(
+            {
+                "ok": False,
+                "error": payload.get("error"),
+                "error_description": payload.get("error_description"),
+            }
+        ), 400
+
+    state = str(payload.get("state") or "")
+    if not _verify_public_oauth_state(state):
+        return jsonify({"ok": False, "error": "INVALID_OAUTH_STATE"}), 400
+
+    code = str(payload.get("code") or "").split("#", 1)[0].strip()
+    if not code:
+        return jsonify({"ok": False, "error": "MISSING_AUTHORIZATION_CODE"}), 400
+
+    status, result = _complete_oauth(code, PUBLIC_OAUTH_REDIRECT_URI)
+    if status != 200:
+        return jsonify(result), status
+
+    connection_id = secrets.token_urlsafe(24)
+    TOKEN_STORE[f"public:{connection_id}"] = result
+    return jsonify(
+        {
+            "ok": True,
+            "status": "CONNECTED_VERIFIED",
+            "connection_id": connection_id,
+            "username": result.get("username"),
+            "account_type": result.get("account_type"),
+            "professional_user_id": result.get("user_id"),
+            "public_publish_authorized": PUBLIC_PUBLISH_AUTHORIZED,
+        }
+    )
 
 
 @app.get("/auth/instagram/start")
@@ -221,128 +462,10 @@ def instagram_callback():
     if not code:
         return jsonify({"ok": False, "error": "MISSING_AUTHORIZATION_CODE"}), 400
 
-    token_response = requests.post(
-        "https://api.instagram.com/oauth/access_token",
-        data={
-            "client_id": APP_ID,
-            "client_secret": APP_SECRET,
-            "grant_type": "authorization_code",
-            "redirect_uri": REDIRECT_URI,
-            "code": code,
-        },
-        timeout=45,
-    )
-    try:
-        token_payload = token_response.json()
-    except Exception:
-        token_payload = {"raw": token_response.text[:1000]}
-    if token_response.status_code >= 400 or not token_payload.get("access_token"):
-        return jsonify(
-            {
-                "ok": False,
-                "stage": "SHORT_TOKEN_EXCHANGE",
-                "http": token_response.status_code,
-                "provider": token_payload,
-            }
-        ), 502
+    status, rec = _complete_oauth(code, REDIRECT_URI)
+    if status != 200:
+        return jsonify(rec), status
 
-    short_token = token_payload["access_token"]
-    user_id = token_payload.get("user_id")
-
-    long_response = requests.get(
-        "https://graph.instagram.com/access_token",
-        params={
-            "grant_type": "ig_exchange_token",
-            "client_secret": APP_SECRET,
-            "access_token": short_token,
-        },
-        timeout=45,
-    )
-    try:
-        long_payload = long_response.json()
-    except Exception:
-        long_payload = {"raw": long_response.text[:1000]}
-
-    if long_response.status_code >= 400 or not long_payload.get("access_token"):
-        safe_error = long_payload.get("error") if isinstance(long_payload, dict) else None
-        if isinstance(safe_error, dict):
-            safe_error = {
-                "type": safe_error.get("type"),
-                "code": safe_error.get("code"),
-                "message": safe_error.get("message"),
-            }
-        else:
-            safe_error = {"message": "Long-lived token exchange failed"}
-        return jsonify(
-            {
-                "ok": False,
-                "stage": "LONG_TOKEN_EXCHANGE",
-                "http": long_response.status_code,
-                "provider_error": safe_error,
-            }
-        ), 502
-
-    token = long_payload["access_token"]
-    expires_in = long_payload.get("expires_in")
-
-    profile_http, profile = _graph(
-        "GET",
-        "me",
-        token,
-        params={"fields": "id,user_id,username,account_type"},
-    )
-    if profile_http >= 400:
-        return jsonify(
-            {
-                "ok": False,
-                "stage": "PROFILE_VERIFY",
-                "http": profile_http,
-                "provider": profile,
-            }
-        ), 502
-
-    app_scoped_user_id = profile.get("id") or user_id
-    professional_user_id = profile.get("user_id")
-    account_type = str(profile.get("account_type") or "").strip()
-    normalized_account_type = account_type.replace(" ", "_").upper()
-    actual_username = str(profile.get("username") or "").strip().lstrip("@").lower()
-    if EXPECTED_USERNAME and actual_username != EXPECTED_USERNAME:
-        return jsonify(
-            {
-                "ok": False,
-                "stage": "PROFILE_VERIFY",
-                "error": "INSTAGRAM_ACCOUNT_MISMATCH",
-                "expected_username": EXPECTED_USERNAME,
-                "actual_username": actual_username or None,
-            }
-        ), 403
-    if not professional_user_id:
-        return jsonify(
-            {
-                "ok": False,
-                "stage": "PROFILE_VERIFY",
-                "error": "MISSING_PROFESSIONAL_USER_ID",
-            }
-        ), 502
-    if normalized_account_type not in {"BUSINESS", "MEDIA_CREATOR"}:
-        return jsonify(
-            {
-                "ok": False,
-                "stage": "PROFILE_VERIFY",
-                "error": "INSTAGRAM_PROFESSIONAL_ACCOUNT_REQUIRED",
-                "account_type": account_type or None,
-            }
-        ), 422
-
-    rec = {
-        "access_token": token,
-        "user_id": professional_user_id,
-        "app_scoped_user_id": app_scoped_user_id,
-        "username": profile.get("username"),
-        "account_type": account_type,
-        "expires_in": expires_in,
-        "connected_at": int(time.time()),
-    }
     TOKEN_STORE[_sid()] = rec
     return redirect(url_for("share"))
 
