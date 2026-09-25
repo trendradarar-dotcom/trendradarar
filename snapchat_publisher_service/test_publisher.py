@@ -4,10 +4,13 @@ from unittest.mock import Mock, patch
 
 from publisher import (
     AyrshareSpotlightPublisher,
+    DisabledSpotlightPublisher,
     EnvelopeValidationError,
     PublicationGateClosed,
     SpotlightEnvelope,
     build_ayrshare_payload,
+    control_state,
+    selected_publisher,
     validate_envelope,
 )
 
@@ -16,6 +19,7 @@ def base_payload():
     return {
         "publication_id": "snap-sa-trend-001-20260925T120000Z",
         "market": "SA",
+        "market_label": "السعودية",
         "language": "ar",
         "headline": "هذا ما يصعد الآن في السعودية",
         "description": "ترند سعودي مختار ومراجع",
@@ -26,6 +30,7 @@ def base_payload():
         "originality_passed": True,
         "rights_passed": True,
         "human_origin_passed": True,
+        "content_origin_type": "human_source_ai_assisted",
         "visual_template_id": "snap-country-board-v1",
         "trend_id": "trend-001",
         "saudi_filter_passed": True,
@@ -66,19 +71,47 @@ class PublisherTests(unittest.TestCase):
         errors = validate_envelope(SpotlightEnvelope.from_dict(data))
         self.assertIn("snapchat_human_origin_gate_failed", errors)
 
-    def test_visual_template_is_mandatory(self):
+    def test_wholly_ai_generated_origin_is_blocked(self):
         data = base_payload()
-        data["visual_template_id"] = ""
+        data["content_origin_type"] = "wholly_ai_generated"
         errors = validate_envelope(SpotlightEnvelope.from_dict(data))
-        self.assertIn("visual_template_id_required", errors)
+        self.assertIn("content_origin_type_not_recommendation_eligible", errors)
 
-    def test_global_lane_requires_explicit_selection(self):
+    def test_country_template_is_exact(self):
         data = base_payload()
-        data["market"] = "GLOBAL_SELECTED"
-        data["saudi_filter_passed"] = False
-        data["global_selected"] = False
+        data["visual_template_id"] = "arbitrary-template"
+        errors = validate_envelope(SpotlightEnvelope.from_dict(data))
+        self.assertIn("visual_template_id_unrecognized", errors)
+
+    def test_country_label_is_exact(self):
+        data = base_payload()
+        data["market_label"] = "SA"
+        errors = validate_envelope(SpotlightEnvelope.from_dict(data))
+        self.assertIn("country_market_label_mismatch", errors)
+
+    def test_global_lane_requires_explicit_selection_template_and_label(self):
+        data = base_payload()
+        data.update({
+            "market": "GLOBAL_SELECTED",
+            "market_label": "ترند عالمي",
+            "visual_template_id": "snap-global-board-v1",
+            "saudi_filter_passed": False,
+            "global_selected": False,
+        })
         errors = validate_envelope(SpotlightEnvelope.from_dict(data))
         self.assertIn("global_selection_required", errors)
+
+    def test_valid_global_lane_passes(self):
+        data = base_payload()
+        data.update({
+            "market": "GLOBAL_SELECTED",
+            "market_label": "ترند عالمي",
+            "visual_template_id": "snap-global-board-v1",
+            "saudi_filter_passed": False,
+            "global_selected": True,
+        })
+        errors = validate_envelope(SpotlightEnvelope.from_dict(data))
+        self.assertEqual(errors, [])
 
     def test_non_arab_market_is_blocked(self):
         data = base_payload()
@@ -91,6 +124,12 @@ class PublisherTests(unittest.TestCase):
         data["duration_seconds"] = 29.9
         errors = validate_envelope(SpotlightEnvelope.from_dict(data))
         self.assertIn("duration_below_internal_30_second_floor", errors)
+
+    def test_over_60_seconds_is_blocked(self):
+        data = base_payload()
+        data["duration_seconds"] = 60.1
+        errors = validate_envelope(SpotlightEnvelope.from_dict(data))
+        self.assertIn("duration_above_internal_60_second_ceiling", errors)
 
     def test_payload_targets_snapchat_spotlight_and_idempotency(self):
         env = SpotlightEnvelope.from_dict(base_payload())
@@ -105,10 +144,26 @@ class PublisherTests(unittest.TestCase):
         payload = build_ayrshare_payload(env, "2026-09-26T12:30:00+03:00")
         self.assertEqual(payload["scheduleDate"], "2026-09-26T09:30:00Z")
 
-    def test_publication_gate_defaults_closed(self):
+    def test_default_provider_is_disabled(self):
+        with patch.dict(os.environ, {}, clear=True):
+            publisher = selected_publisher()
+            self.assertIsInstance(publisher, DisabledSpotlightPublisher)
+
+    def test_control_state_defaults_fail_closed(self):
+        with patch.dict(os.environ, {}, clear=True):
+            state = control_state()
+            self.assertFalse(state["publication_enabled"])
+            self.assertTrue(state["kill_switch"])
+            self.assertTrue(state["emergency_read_only"])
+
+    def test_publication_gate_blocks_even_with_api_key(self):
         env = SpotlightEnvelope.from_dict(base_payload())
         publisher = AyrshareSpotlightPublisher(api_key="test-key")
-        with patch.dict(os.environ, {}, clear=True):
+        with patch.dict(os.environ, {
+            "SNAPCHAT_PUBLICATION_ENABLED": "true",
+            "SNAPCHAT_KILL_SWITCH": "true",
+            "SNAPCHAT_EMERGENCY_READ_ONLY": "false",
+        }, clear=True):
             with self.assertRaises(PublicationGateClosed):
                 publisher.publish(env)
 
@@ -127,6 +182,7 @@ class PublisherTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         called_url = session.post.call_args.args[0]
         self.assertTrue(called_url.endswith("/validate/post"))
+        self.assertEqual(result["external_publication_side_effect"], "NONE")
 
     def test_status_reconciliation_reads_provider_post(self):
         session = Mock()
@@ -135,6 +191,11 @@ class PublisherTests(unittest.TestCase):
         result = publisher.get_post_status("abc")
         self.assertEqual(result["id"], "abc")
         self.assertTrue(session.get.call_args.args[0].endswith("/post/abc"))
+
+    def test_status_rejects_malformed_post_id(self):
+        publisher = AyrshareSpotlightPublisher(api_key="test-key", session=Mock())
+        with self.assertRaises(ValueError):
+            publisher.get_post_status("../secrets")
 
 
 if __name__ == "__main__":
