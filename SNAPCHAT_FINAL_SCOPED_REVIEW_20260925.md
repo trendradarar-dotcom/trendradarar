@@ -319,3 +319,27 @@ PUBLICATION_AUTHORITY = ZERO
 MAXIMUM_CURRENT_PUBLICATION_BLAST_RADIUS = 0
 
 No stronger PASS is authorized.
+
+
+## 12. Live provider-state reconciliation — 2026-09-25 19:15+03
+
+A fresh authenticated Ads Manager check was performed against the exact Trend Radar Snapchat organization.
+
+Verified live state:
+- Business Details contains the section: OAuth Protocol Apps / تطبيقات بروتوكول OAuth.
+- No OAuth application currently exists.
+- The create control exists.
+- Attempting to use it returns the exact UI gate: «افتح حسابًا تجاريًا للبدء.» / “Open a business account to start.”
+- The Organization Information panel currently has no street address, city, or country populated.
+- No OAuth app, client ID, client secret, ad campaign, billing method, paid subscription, or public content was created during this check.
+- The Snap Developer Portal is NOT the correct Public Profile API OAuth-app path; the first-party documentation directs this flow through Ads Manager / Business Dashboard / Business Details.
+
+Current exact external gate:
+BUSINESS_ACCOUNT_OPENING = OWNER_ONLY_EXTERNAL_GATE
+
+Reason:
+Completing the Business Account opening flow requires real owner/legal facts and acceptance of Snap commercial terms. Those values must not be guessed, fabricated, or borrowed from an unrelated commercial registry.
+
+Engineering consequence:
+- current autonomous publication remains safely blocked;
+- the existing direct Public Profile API bridge remains the correct no-recurring-publisher-fee technical target once this one-time external gate is legitimately completed and the OAuth client is allowlisted.
