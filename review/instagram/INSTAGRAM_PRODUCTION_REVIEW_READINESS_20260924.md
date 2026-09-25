@@ -230,3 +230,23 @@ NEXT_GATE:
 5. Keep media_publish fail-closed.
 
 PUBLIC_INSTAGRAM_PUBLISHING = HOLD
+
+
+## OAuth runtime gate passed — 2026-09-25
+
+LIVE_SERVICE = trendradar-instagram-oauth
+HEALTH_CONFIGURED = true
+PUBLIC_PUBLISH_AUTHORIZED = false
+OAUTH_START_RUNTIME = PASS
+OAUTH_START_PROVIDER_REDIRECT = HTTP 302
+RENDER_LOG_EVIDENCE = GET /auth/instagram/start returned 302 on 2026-09-25
+APP_SECRET_RUNTIME_GATE = CLOSED
+SESSION_SECRET_RUNTIME_GATE = CLOSED
+
+NEXT_EXACT_GATE:
+- Owner completes Instagram OAuth consent for @trendradarar in the browser.
+- Callback must return to /auth/instagram/callback.
+- Service then verifies exact Instagram professional identity and scopes.
+- media_publish remains disabled.
+
+PUBLIC_INSTAGRAM_PUBLISHING = HOLD
