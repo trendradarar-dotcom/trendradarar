@@ -124,6 +124,10 @@ def control_state() -> Dict[str, Any]:
         "publication_enabled": _env_bool("SNAPCHAT_PUBLICATION_ENABLED", False),
         "kill_switch": _env_bool("SNAPCHAT_KILL_SWITCH", True),
         "emergency_read_only": _env_bool("SNAPCHAT_EMERGENCY_READ_ONLY", True),
+        "target_account_verified": _env_bool("SNAPCHAT_TARGET_ACCOUNT_VERIFIED", False),
+        "durable_reconciliation_ready": _env_bool("SNAPCHAT_DURABLE_RECONCILIATION_READY", False),
+        "alerting_ready": _env_bool("SNAPCHAT_ALERTING_READY", False),
+        "production_assurance_ready": _env_bool("SNAPCHAT_PRODUCTION_ASSURANCE_READY", False),
     }
 
 
@@ -136,6 +140,14 @@ def _publication_gate_errors() -> list[str]:
         errors.append("kill_switch_active")
     if state["emergency_read_only"]:
         errors.append("emergency_read_only_active")
+    if not state["target_account_verified"]:
+        errors.append("target_account_not_verified")
+    if not state["durable_reconciliation_ready"]:
+        errors.append("durable_reconciliation_not_ready")
+    if not state["alerting_ready"]:
+        errors.append("alerting_not_ready")
+    if not state["production_assurance_ready"]:
+        errors.append("production_assurance_not_ready")
     return errors
 
 
