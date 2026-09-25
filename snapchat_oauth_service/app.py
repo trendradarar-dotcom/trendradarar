@@ -17,7 +17,7 @@ from flask import Flask, jsonify, redirect, request
 
 APP_VERSION = "snapchat-oauth-service-20260925.2"
 AUTH_URL = "https://accounts.snapchat.com/login/oauth2/authorize"
-TOKEN_URL = "https://accounts.snapchat.com/login/oauth2/access_token"
+OAUTH_EXCHANGE_URL = "https://accounts.snapchat.com/login/oauth2/access_token"
 BUSINESS_API = "https://businessapi.snapchat.com"
 SCOPE = "snapchat-profile-api"
 CHUNK_SIZE = 32 * 1024 * 1024
@@ -27,12 +27,7 @@ LOCALE_RE = re.compile(r"^[a-z]{2}_[A-Z]{2}$")
 
 app = Flask(__name__)
 _token_lock = threading.Lock()
-_runtime_tokens = {
-    "access_token": None,
-    "refresh_token": None,
-    "expires_at": 0,
-    "scope": None,
-}
+_runtime_tokens = {}
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -123,7 +118,7 @@ def _store_tokens(payload: dict):
 
 def _exchange_code(code: str) -> dict:
     response = requests.post(
-        TOKEN_URL,
+        OAUTH_EXCHANGE_URL,
         data={
             "grant_type": "authorization_code",
             "client_id": os.environ["SNAPCHAT_CLIENT_ID"],
@@ -147,7 +142,7 @@ def _refresh_access_token() -> str:
         raise RuntimeError("refresh_token_not_configured")
 
     response = requests.post(
-        TOKEN_URL,
+        OAUTH_EXCHANGE_URL,
         data={
             "grant_type": "refresh_token",
             "client_id": os.environ["SNAPCHAT_CLIENT_ID"],
@@ -550,4 +545,4 @@ def spotlight_publish():
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host=os.getenv("HOST", "127.0.0.1"), port=port)
