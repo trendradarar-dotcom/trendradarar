@@ -1,161 +1,224 @@
-# SNAPCHAT ACTIVATION READINESS — 2026-09-25
+# SNAPCHAT ACTIVATION / ASSURANCE READINESS — 2026-09-25
 
 PROJECT: Trend Radar / TrendHunter
-ENGINE: صياد الترند / TrendHunter
 PLATFORM: Snapchat only
-MODE: Fresh / isolated / exact-target-bound / fail-closed
-GOVERNANCE: SNAPCHAT_AUTOMATION_ARCHITECTURE_GOVERNANCE_20260925.md revision 1.1
-ASSURANCE: SNAPCHAT_ARCHITECTURE_ASSURANCE_REVIEW_20260925.md
-PUBLICATION STATE: BLOCKED
+MODE: strict isolation / exact evidence / fail-closed
+AUTHORITATIVE GOVERNANCE: SNAPCHAT_AUTOMATION_GOVERNANCE_V2_20260925.md
+ACCEPTANCE MATRIX: SNAPCHAT_ACCEPTANCE_MATRIX_20260925.md
+PUBLICATION STATE: HOLD
+PUBLICATION AUTHORITY: ZERO
 
-## Frozen product intent
+## Frozen operating requirement
 
-TrendHunter -> country routing -> local/legal filter -> original/authentic content production -> Snapchat-native country/global visual board -> provider validation -> automated Spotlight publication -> result reconciliation -> performance feedback.
+Normal runtime human actions target:
+- 0
 
-Public framing:
-- Trend Radar / رادار الترند
-- «اكتشف ما يصعد الآن في بلدك والعالم»
-- country lane: «هذا ما يصعد الآن في بلدك»
-- separate GLOBAL_SELECTED lane
+Accepted exception model:
+- owner is disturbed only for a rare external legal/technical action that the automation cannot itself perform, such as external re-authentication/2FA/new legal consent.
 
-Business objective:
-- grow the account;
-- reach lawful monetization eligibility;
-- zero routine human publication actions.
+Rejected:
+- routine manual posting;
+- unrelated commercial registry;
+- misleading business identity;
+- new paid publisher merely to solve Snapchat.
 
-## Repository / isolation
-
-- Repository: trendradarar-dotcom/trendradarar
-- Branch: snapchat-production-review-20260925
-- Cross-project/platform source-state reuse: NONE
-- Direct Snapchat OAuth service retained only as dormant fallback.
-
-## Snapchat account
+## Product identity
 
 - username: trendradarar
-- public brand: Trend Radar
-- Public Profile: CREATED
-- Professional Profile: REQUIRED FOR AYRSHARE LINK / NOT YET VERIFIED
-- unrelated furniture commercial registry: NOT PART OF DEFAULT ARCHITECTURE
-- Snapchat Business Account: NOT PART OF DEFAULT ARCHITECTURE
+- brand: Trend Radar / رادار الترند
+- Public Profile: created
+- master slogan: «اكتشف ما يصعد الآن في بلدك والعالم»
+- local framing: «هذا ما يصعد الآن في بلدك»
+- separate GLOBAL_SELECTED lane: «ترند عالمي»
 
 ## Geographic model
 
 Arab-country lanes:
-DZ, BH, KM, DJ, EG, IQ, JO, KW, LB, LY, MR, MA, OM, PS, QA, SA, SO, SD, SY, TN, AE, YE.
+DZ, BH, KM, DJ, EG, IQ, JO, KW, LB, LY, MR, MA, OM, PS, QA, SA, SO, SD, SY, TN, AE, YE
 
-Separate lane:
+Global:
 - GLOBAL_SELECTED
 
-Saudi lane:
-- initial operating market
-- dedicated Saudi gate required before publication
+Saudi:
+- dedicated Saudi gate required.
 
-## Primary provider architecture
+## Current route feasibility
 
-Selected provider for current implementation: AYRSHARE.
+Direct Snapchat Public Profile API:
+- official autonomous path exists technically;
+- current official access model requires Business Account/Organization + OAuth App + allowlisting;
+- under frozen owner constraints this route is externally blocked for the current setup;
+- direct bridge retained dormant and fully disabled by default.
 
-Verified current provider capabilities:
-- Snapchat Public/Professional Profile linking
-- direct Spotlight publication through POST /post
-- no-side-effect provider validation through POST /validate/post
-- post status read by provider post ID
-- provider idempotencyKey support
+Ayrshare:
+- adapter retained as evaluated contingency;
+- not selected;
+- no production subscription/trial/payment dependency.
 
-Provider economics:
-- current public Premium price: $149/month for one social profile
-- current Launch trial: 28 days, no card required
-- any paid commitment remains owner-only
+Creative Kit / web upload:
+- not accepted as normal runtime because user action is required to complete publication.
 
-## Independent assurance review
+Current provider:
+- disabled
 
-Review mode:
-Fresh Independent + Discovery + Directed + Creative/Adversarial + Verification.
-
-Review commit:
-- 6cb3af96edb6d54933e0c53d196b3b8779e18298
-
-Findings discovered:
-- F1 Professional Profile requirement
-- F2 missing provider-side validation
-- F3 missing duplicate/idempotency controls
-- F4 missing provider status feedback implementation
-- F5 unsafe Python bool coercion
-- F6 Snapchat 2026 human-origin/authenticity requirement not executable
-- F7 tests committed but no execution evidence
-- F8 provider cost is a material business dependency
-- F9 visual-board contract not machine-verified
-- F10 monetization has additional audience/compliance conditions
-
-## Remediation implemented
-
-Publisher hardening commit:
-- 7cf202902b2651db180aad52f1d33c03c0127dde
-
-Implemented:
-- strict native-JSON boolean PASS semantics
-- stable publication_id
-- deterministic Ayrshare idempotencyKey
-- process serialization for same publication_id
-- explicit human_origin_passed gate
-- explicit visual_template_id gate
-- provider POST /validate/post support
-- provider GET /post/{id} status support
-
-API wiring commit:
-- 8ccee27c0e5d678c66de21cb4f300c5b6b126fdf
-
-Implemented:
-- local + provider validation path
-- read-only provider status endpoint
-- publication remains fail-closed
-
-Expanded tests commit:
-- 3bc01f001cef31d6359d5bf89d8eb912cad9fedc
-
-Governance reconciliation commit:
-- f693486ed71fbf0151b7f65521bebbee072e8d50
-
-## Render
+## Publisher implementation
 
 Service:
 - trendradar-snapchat-publisher
-- ID: srv-dar6s0vavr4c7380epmg
+- Render ID: srv-dar6s0vavr4c7380epmg
 - URL: https://trendradar-snapchat-publisher.onrender.com
-- region: Frankfurt
-- branch: snapchat-production-review-20260925
+- latest verified deploy: dep-dar875nlot8c73equlng
+- source code baseline in deploy: 7d98f9be995423ab9d2ef1ef2f612c23d049dd6e
+- deploy state: LIVE
 
-Latest hardened deploy requested:
-- dep-dar7dih42hec73d99o8g
-- target commit: f693486ed71fbf0151b7f65521bebbee072e8d50
-- current observed state at this readiness update: UPDATE_IN_PROGRESS
+External /health verification:
+- ok=true
+- version=snapchat-publisher-service-20260925.3
+- provider=disabled
+- provider_configured=false
+- publication_enabled=false
+- kill_switch=true
+- emergency_read_only=true
+- normal_runtime_human_actions_target=0
+- external_publication_side_effect=NONE
 
-Previous live service remains fail-closed:
-- AYRSHARE_API_KEY not configured
-- SNAPCHAT_PUBLICATION_ENABLED=false
+Implemented gates:
+- exact 22 Arab markets + GLOBAL_SELECTED
+- exact Arabic market labels
+- exact local/global template IDs
+- Arabic activation
+- stable publication_id
+- strict native-boolean PASS semantics
+- rights gate
+- originality gate
+- human-origin gate
+- wholly-AI-generated content blocked from growth lane
+- Saudi gate
+- HTTPS media URL
+- 30–60 second internal target
+- 9:16 target / minimum dimensions
+- deterministic provider idempotency where supported
+- in-process duplicate serialization
+- generic provider validation/status adapter
+- correlation IDs
+- structured secret-safe audit events
+- disabled provider default
+- kill switch
+- emergency read-only
+- publication gate
 
-## Remaining assurance gates
+## Dormant first-party bridge
 
-HOLD remains in force until:
-1. hardened deploy reaches LIVE;
-2. exact-target automated tests have executed with PASS evidence;
-3. existing Snapchat Public Profile is switched to Professional Profile;
-4. provider account is created/authorized without invented legal identity;
-5. exact trendradarar account binding is verified;
-6. API key is stored only as a Render secret;
-7. provider /validate/post passes with no publication;
-8. exact-account read-only verification passes;
-9. production publication is explicitly authorized;
-10. SNAPCHAT_PUBLICATION_ENABLED is intentionally changed to true.
+Service:
+- trendradar-snapchat-oauth
+- Render ID: srv-daqvhinavr4c73f6r9sg
+- URL: https://trendradar-snapchat-oauth.onrender.com
+- latest verified deployment target: 9a55b44bb7e5bada1640c883086f1b57cc9c9df1
+- deploy: dep-dar89a3ncjis73cgsn4g
+- state: LIVE
 
-No live/random Snapchat post has been sent.
+External health:
+- version=snapchat-oauth-service-20260925.2
+- direct_api_enabled=false
+- publication_enabled=false
+- kill_switch=true
+- emergency_read_only=true
+- client_id=false
+- client_secret=false
+- profile_id=false
+- refresh_token=false
 
-## Growth / monetization constraints
+External inertness verification:
+- GET /auth/start returned direct_api_disabled
+- external_side_effect=BLOCKED
 
-Current Snapchat first-party rules include:
-- wholly AI-generated videos are not eligible for Spotlight recommendation;
-- revenue-eligible Spotlight videos must be at least 30 seconds;
-- current program eligibility also includes original advertiser-friendly content, eligible-country residence, Snap Star status, 50,000 followers, and 15,000 view-hours in 28 days including 3,000 Spotlight hours;
-- Saudi Arabia is currently payout-eligible.
+Dormant bridge improvements:
+- external API disabled by default;
+- OAuth/read/publish/validation/token-status paths inert when disabled;
+- error bodies/details reduced;
+- current direct dependencies pinned;
+- publication has independent publication/kill/read-only controls.
 
-Therefore the automation target is not merely technically publishable content. It is recommendation-oriented, authentic, rights-safe, country-aware content designed for sustainable growth.
+## CI / test / supply-chain evidence
+
+Latest exact code CI:
+- run ID: 36147465872
+- head: 9a55b44bb7e5bada1640c883086f1b57cc9c9df1
+- result: SUCCESS
+
+Same run:
+- publisher/API tests: 26 PASS
+- dormant direct-bridge tests: 5 PASS
+- Python compile both services: PASS
+- pip dependency consistency: PASS
+- pip-audit publisher requirements: NO KNOWN VULNERABILITIES FOUND
+- pip-audit direct bridge requirements: NO KNOWN VULNERABILITIES FOUND
+- basic committed credential-pattern scan: PASS
+
+Publisher direct pins:
+- Flask 3.1.3
+- gunicorn 26.2.0
+- requests 2.34.2
+
+Direct bridge direct pins:
+- Flask 3.1.3
+- gunicorn 26.2.0
+- requests 2.34.2
+- cryptography 50.0.1
+
+This is internal/automated evidence, not independent verification.
+
+## Recovery assets created
+
+- SNAPCHAT_OWNER_RECOVERY_PACKAGE_20260925.md
+- SNAPCHAT_RECOVERY_RUNBOOK_20260925.md
+- SNAPCHAT_SBOM_20260925.md
+- SNAPCHAT_GOLDEN_BASELINE_CANDIDATE_20260925.md
+- SNAPCHAT_ACCEPTANCE_MATRIX_20260925.md
+
+Golden status:
+- CANDIDATE ONLY
+- not an independently verified GOLDEN RELEASE.
+
+## Remaining production blockers
+
+Blocking:
+1. no currently accepted official publication route satisfies all frozen owner constraints;
+2. durable cross-restart publication ledger/reconciliation is not implemented;
+3. external alert delivery/retention is not verified;
+4. independent code/architecture/security verification is not completed;
+5. independent recovery/cold-engineer handover is not completed.
+
+Not a blocker to internal preparation:
+- content validation;
+- Snapchat visual packaging;
+- country/global routing;
+- fail-closed service operation.
+
+## Applicable acceptance state
+
+Internal implementation / regression evidence:
+- PASS for current fail-closed baseline.
+
+Independent verification:
+- NOT VERIFIED.
+
+Autonomous public Spotlight:
+- HOLD_EXTERNAL_ACCESS_MODEL.
+
+Routine manual publishing:
+- REJECTED.
+
+Paid publishing intermediary:
+- NOT SELECTED.
+
+Unrelated commercial registry:
+- NOT USED.
+
+## Final current decision
+
+SNAPCHAT_ENGINEERING_VIABILITY = YES
+BUILD_AND_FORGET_NORMAL_RUNTIME_TARGET = VIABLE IN PRINCIPLE
+CURRENT_PUBLIC_AUTONOMOUS_PUBLICATION = NOT YET VIABLE UNDER FROZEN ACCESS CONSTRAINTS
+CURRENT_MAXIMUM_PUBLICATION_BLAST_RADIUS = 0
+PUBLICATION_GATE = CLOSED
