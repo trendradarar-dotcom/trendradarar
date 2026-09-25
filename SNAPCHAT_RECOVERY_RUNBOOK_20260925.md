@@ -98,8 +98,12 @@ Before production reopening:
 
 ## Phase 8 — RECOVER
 
-Open production only through a deliberate change:
+Open production only through a deliberate change after evidence exists:
 - select the accepted provider/first-party route;
+- set SNAPCHAT_TARGET_ACCOUNT_VERIFIED=true only after exact provider-side binding evidence;
+- set SNAPCHAT_DURABLE_RECONCILIATION_READY=true only after durable ledger/retry reconciliation is operational;
+- set SNAPCHAT_ALERTING_READY=true only after external exception alert delivery is tested;
+- set SNAPCHAT_PRODUCTION_ASSURANCE_READY=true only after required production assurance/retest is complete;
 - set emergency read-only false;
 - release kill switch;
 - set publication enabled true last.
