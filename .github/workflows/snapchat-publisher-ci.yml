@@ -26,19 +26,23 @@ jobs:
         with:
           python-version: "3.14"
 
-      - name: Install publisher runtime dependencies
+      - name: Install Snapchat runtime dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r snapchat_publisher_service/requirements.txt
+          python -m pip install -r snapchat_oauth_service/requirements.txt
           python -m pip check
 
-      - name: Vulnerability audit publisher dependencies
+      - name: Vulnerability audit Snapchat dependencies
         run: |
           python -m pip install pip-audit==2.10.1
           pip-audit -r snapchat_publisher_service/requirements.txt
+          pip-audit -r snapchat_oauth_service/requirements.txt
 
-      - name: Compile publisher
-        run: python -m compileall -q snapchat_publisher_service
+      - name: Compile Snapchat services
+        run: |
+          python -m compileall -q snapchat_publisher_service
+          python -m compileall -q snapchat_oauth_service
 
       - name: Run exact Snapchat publisher tests
         working-directory: snapchat_publisher_service
