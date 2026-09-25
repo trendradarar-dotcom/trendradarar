@@ -20,6 +20,7 @@ APP_SECRET = os.getenv("INSTAGRAM_APP_SECRET", "").strip()
 REDIRECT_URI = os.getenv("INSTAGRAM_REDIRECT_URI", "").strip()
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
 SESSION_SECRET = os.getenv("SESSION_SECRET", "").strip()
+EXPECTED_USERNAME = os.getenv("INSTAGRAM_EXPECTED_USERNAME", "").strip().lstrip("@").lower()
 SCOPES = (
     "instagram_business_basic",
     "instagram_business_content_publish",
@@ -196,7 +197,6 @@ def instagram_start():
         "scope": ",".join(SCOPES),
         "state": state,
         "enable_fb_login": "false",
-        "force_reauth": "true",
     }
     return redirect("https://www.instagram.com/oauth/authorize?" + urlencode(params))
 
@@ -305,6 +305,17 @@ def instagram_callback():
     professional_user_id = profile.get("user_id")
     account_type = str(profile.get("account_type") or "").strip()
     normalized_account_type = account_type.replace(" ", "_").upper()
+    actual_username = str(profile.get("username") or "").strip().lstrip("@").lower()
+    if EXPECTED_USERNAME and actual_username != EXPECTED_USERNAME:
+        return jsonify(
+            {
+                "ok": False,
+                "stage": "PROFILE_VERIFY",
+                "error": "INSTAGRAM_ACCOUNT_MISMATCH",
+                "expected_username": EXPECTED_USERNAME,
+                "actual_username": actual_username or None,
+            }
+        ), 403
     if not professional_user_id:
         return jsonify(
             {
