@@ -27,6 +27,7 @@ PUBLIC_OAUTH_REDIRECT_URI = os.getenv(
 OAUTH_PUBLIC_ORIGIN = os.getenv(
     "INSTAGRAM_OAUTH_PUBLIC_ORIGIN", "https://trendradar.com.co"
 ).strip().rstrip("/")
+OAUTH_GATEWAY_SECRET = os.getenv("INSTAGRAM_OAUTH_GATEWAY_SECRET", "").strip()
 SCOPES = (
     "instagram_business_basic",
     "instagram_business_content_publish",
@@ -267,6 +268,15 @@ def _complete_oauth(code, redirect_uri):
     }
 
 
+def _gateway_authorized():
+    supplied = request.headers.get("X-TrendRadar-Gateway", "")
+    return bool(
+        OAUTH_GATEWAY_SECRET
+        and supplied
+        and hmac.compare_digest(supplied, OAUTH_GATEWAY_SECRET)
+    )
+
+
 def _parse_signed_request(signed_request):
     if not APP_SECRET or not signed_request or "." not in signed_request:
         return None
@@ -354,6 +364,8 @@ small{{color:#555}}
 def public_oauth_start():
     if request.method == "OPTIONS":
         return ("", 204)
+    if not _gateway_authorized():
+        return jsonify({"ok": False, "error": "GATEWAY_UNAUTHORIZED"}), 403
     if not _configured() or not PUBLIC_OAUTH_REDIRECT_URI:
         return jsonify({"ok": False, "error": "META_APP_NOT_CONFIGURED"}), 503
     state = _make_public_oauth_state()
@@ -377,6 +389,8 @@ def public_oauth_start():
 def public_oauth_callback():
     if request.method == "OPTIONS":
         return ("", 204)
+    if not _gateway_authorized():
+        return jsonify({"ok": False, "error": "GATEWAY_UNAUTHORIZED"}), 403
     payload = request.get_json(silent=True) or {}
     if payload.get("error"):
         return jsonify(
