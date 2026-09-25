@@ -1,131 +1,223 @@
-# SNAPCHAT ARCHITECTURE ASSURANCE REVIEW — 2026-09-25
+# SNAPCHAT ASSURANCE REVIEW — CURRENT SCOPED RESULT — 2026-09-25
 
 PROJECT: Trend Radar / TrendHunter
 PLATFORM: Snapchat only
-REVIEW MODE: Fresh Independent + Discovery + Directed + Creative/Adversarial + Verification
 TARGET BRANCH: snapchat-production-review-20260925
+REVIEW TYPE: PRODUCER-ASSISTED INTERNAL ASSURANCE
+INDEPENDENT VERIFICATION: NOT VERIFIED
 PUBLICATION SIDE EFFECT: NONE
-DECISION: HOLD FOR REMEDIATION BEFORE PROVIDER ONBOARDING / PUBLICATION
+GOVERNANCE: SNAPCHAT_AUTOMATION_GOVERNANCE_V2_20260925.md
 
-## Scope reviewed
+## Important verification boundary
 
-- SNAPCHAT_AUTOMATION_ARCHITECTURE_GOVERNANCE_20260925.md
-- SNAPCHAT_ACTIVATION_READINESS_20260925.md
-- snapchat_publisher_service/publisher.py
-- snapchat_publisher_service/app.py
-- snapchat_publisher_service/test_publisher.py
-- live Render deployment/readiness
-- current Snapchat first-party monetization/authenticity rules
-- current Ayrshare Snapchat linking/post/validation/status documentation and pricing
+This review and the implementation changes were produced with the same AI-assisted development process.
 
-## Independent findings
+Therefore this document MUST NOT be represented as:
+- independent code review;
+- independent penetration test;
+- independent ASVS L3 verification;
+- independent recovery verification;
+- cold-engineer handover evidence.
 
-### F1 — Ayrshare requires a Professional Profile, not merely a Public Profile
-Severity: BLOCKING EXTERNAL LINK
+Producer self-review is useful for discovery/remediation but is not independent assurance.
 
-Current Ayrshare Snapchat linking documentation requires the Snapchat Public Profile to be switched to a Professional Profile before linking. The existing governance treated this as optional/provider-dependent.
+## Fresh Snapchat-only findings
 
-Required remediation:
-- make Professional Profile verification an explicit pre-link gate;
-- do not equate Professional Profile conversion with creating a separate legal business entity;
-- no commercial-registry data may be invented.
+### S1 — No current publication route satisfies all frozen owner constraints
+Status: OPEN / EXTERNAL BLOCKER
 
-### F2 — Provider-side no-side-effect validation is documented but not implemented
-Severity: HIGH
+Frozen constraints:
+- zero routine human posting;
+- no unrelated/misleading business identity;
+- no new paid publisher merely to solve Snapchat.
 
-Current /spotlight/validate only performs local validation and creates a payload preview.
-Ayrshare provides POST /api/validate/post which performs provider-side validation without publishing.
+Verified route analysis:
+- Direct Snapchat Public Profile API requires the first-party Business Account/Organization + OAuth App + allowlisting path.
+- Ayrshare provides autonomous Spotlight API publication but is a paid production dependency and is not selected.
+- Creative Kit and web upload require the user to complete posting.
 
-Required remediation:
-- implement provider validate(envelope) against /validate/post;
-- production publication gate must require a successful provider validation after account connection/API-key configuration.
+Result:
+AUTONOMOUS_PUBLIC_SPOTLIGHT = HOLD_EXTERNAL_ACCESS_MODEL.
 
-### F3 — Duplicate-publication protection is incomplete
-Severity: HIGH
+This is not remediable by pretending a provider exists. The correct behavior is fail-closed.
 
-Ayrshare supports idempotencyKey for /post. Current adapter does not send one.
+### S2 — Paid provider was incorrectly treated as primary
+Status: CLOSED
 
-Required remediation:
-- derive a deterministic idempotency key from the TrendHunter publication identity;
-- preserve the same key across retries of the same intended publication;
-- add internal serialization/dedup guard for simultaneous submissions because provider docs state concurrent duplicate calls may escape provider idempotency detection.
+Remediation:
+- default provider changed from ayrshare to disabled;
+- Ayrshare retained only as dormant optional adapter;
+- no subscription/trial/payment is required for current runtime.
 
-### F4 — Feedback loop is architectural text only
-Severity: HIGH
+### S3 — Missing independent kill/read-only controls
+Status: IMPLEMENTED / INDEPENDENT RETEST NOT VERIFIED
 
-The project intent requires performance/status feedback back into TrendHunter. Current service publishes but has no implemented post-status retrieval/webhook ingestion.
+Remediation:
+- SNAPCHAT_KILL_SWITCH defaults true;
+- SNAPCHAT_EMERGENCY_READ_ONLY defaults true;
+- SNAPCHAT_PUBLICATION_ENABLED defaults false;
+- publication requires all controls intentionally opened.
 
-Required remediation:
-- implement status read by Ayrshare post ID;
-- persist provider post ID against trend_id/publication identity;
-- add scheduled-post status/webhook path later if plan capability is available;
-- provider result is not final TrendHunter success until platform status is reconciled.
+### S4 — Unsafe boolean coercion
+Status: CLOSED BY IMPLEMENTATION / INTERNAL CI PASS
 
-### F5 — Boolean coercion is unsafe
-Severity: HIGH
+Remediation:
+- only native JSON true satisfies PASS gates;
+- strings/numbers/null do not satisfy gates.
 
-Current parsing uses bool(value). A JSON string such as "false" evaluates to True in Python, which can accidentally pass rights/originality/Saudi/global gates.
+### S5 — Visual board identity was too weak
+Status: CLOSED BY IMPLEMENTATION / INTERNAL CI PASS
 
-Required remediation:
-- only native JSON true may satisfy a PASS gate;
-- strings/numbers/null must fail closed.
+Remediation:
+- exact local template ID required;
+- exact global template ID required;
+- exact Arabic country labels required;
+- global lane requires exact «ترند عالمي» label.
 
-### F6 — Snapchat 2026 authenticity change is not executable
-Severity: HIGH FOR GROWTH/MONETIZATION
+### S6 — Wholly AI-generated Spotlight risk
+Status: CLOSED BY GATE / SOURCE-MATERIAL OPERATIONS STILL REQUIRED
 
-Snap announced in July 2026 that wholly AI-generated videos are no longer eligible for Spotlight recommendation. Current originality_passed does not prove the content is not wholly AI-generated.
+Remediation:
+- explicit human_origin_passed;
+- explicit content_origin_type;
+- growth lane allows human_original or human_source_ai_assisted;
+- wholly_ai_generated is blocked.
 
-Required remediation:
-- add an explicit authenticity/human-origin gate;
-- wholly AI-generated video must be blocked from the growth/monetization Spotlight lane;
-- AI-assisted editing, localization, packaging and production may remain automated around human-origin/original source material.
+### S7 — Duplicate/retry safety is not fully durable
+Status: PARTIAL / PRODUCTION BLOCKER
 
-### F7 — Unit tests exist but there is no execution evidence
-Severity: MEDIUM
+Implemented:
+- stable publication_id;
+- deterministic provider idempotency key where supported;
+- in-process serialization.
 
-The Render build installs dependencies and starts the service; it does not execute the unit test suite.
-A committed test file is not evidence of PASS.
+Missing:
+- durable publication ledger;
+- durable reconciliation before retry after unknown provider-side effect.
 
-Required remediation:
-- run tests in CI/build or a separate exact-target verification job;
-- block production enablement on test PASS.
+### S8 — Provider acceptance was not enough
+Status: PARTIAL
 
-### F8 — Provider cost is a material architecture dependency
-Severity: BUSINESS GATE
+Implemented:
+- provider validation method where supported;
+- provider post-status read where supported;
+- unknown provider exception is reported as UNKNOWN_REQUIRES_RECONCILIATION.
 
-Current Ayrshare public pricing shows Premium at $149/month for one social profile. Launch has a 28-day free trial without a card, but production use after evaluation is a financial commitment.
+Missing:
+- durable status persistence;
+- automated final-state reconciliation loop for the eventual selected production route.
 
-Required remediation:
-- do not represent the provider route as cost-free;
-- engineering may continue without payment;
-- any paid subscription is owner-only;
-- retain the direct Snapchat API path as a strategic fallback if provider economics are rejected later.
+### S9 — Auditability was incomplete
+Status: PARTIAL
 
-### F9 — Visual-board contract is documented but not machine-verified
-Severity: MEDIUM
+Implemented:
+- structured UTC audit log;
+- correlation IDs;
+- secret-safe field allowlist;
+- explicit events for validation, block, request, status and unknown side effect.
 
-Country-specific board identity and GLOBAL_SELECTED are governance requirements, but the publisher only validates metadata, duration/resolution/ratio.
+Missing:
+- verified external alert delivery;
+- verified retention policy;
+- independent incident drill.
 
-Required remediation:
-- content-factory output manifest must assert the exact board/template ID, market label and global/local lane;
-- publisher must reject missing/unknown template identity.
+### S10 — Exact tests existed without execution evidence
+Status: CLOSED FOR INTERNAL REGRESSION ONLY
 
-### F10 — Monetization eligibility is broader than the 30-second rule
-Severity: BUSINESS/PRODUCT
+Implemented:
+- GitHub Actions Snapchat-only CI;
+- compile check;
+- pip check;
+- exact unittest discovery;
+- obvious committed-secret-pattern scan.
 
-Snapchat currently requires, among other conditions, original advertiser-friendly content, eligible-country residence, Snap Star status, 50,000 followers and 15,000 view-hours in 28 days including 3,000 Spotlight hours. Saudi Arabia is currently listed as payout-eligible.
+Evidence:
+- workflow: Snapchat Publisher CI
+- run id: 36145796277
+- head SHA: 6a20da8efe11afd33d8cf1353b3f47b0695ad53b
+- conclusion: success
 
-Required remediation:
-- keep the 30-second minimum as the content-production rule;
-- track growth/eligibility metrics separately;
-- do not treat technical publishing success as monetization eligibility.
+Boundary:
+This is producer-side CI evidence, not independent verification.
 
-## Review decision
+### S11 — Dependency versions were loose in publisher runtime
+Status: CLOSED FOR DIRECT PUBLISHER DEPENDENCIES
 
-The architecture direction remains viable, but it is NOT yet assurance-complete.
+Publisher runtime pins:
+- Flask 3.1.3
+- gunicorn 26.2.0
+- requests 2.34.2
 
-External provider onboarding/public publishing remains HOLD until F1-F7 and F9 are remediated or explicitly waived with evidence.
-F8 is an owner-only financial decision and must not be auto-executed.
-F10 is a growth/monetization operating constraint rather than a code-release blocker.
+Still required:
+- vulnerability audit evidence;
+- transitive dependency inventory/SBOM;
+- direct OAuth fallback dependency reconciliation.
 
-No live Snapchat post was created during this review.
+### S12 — Recovery ownership insufficiently documented
+Status: REMEDIATION IN PROGRESS
+
+Required:
+- owner recovery package;
+- recovery runbook;
+- service/config inventory;
+- credential rotation/revocation map;
+- golden candidate;
+- cold-engineer handover test.
+
+### S13 — Direct OAuth fallback exposes unnecessary dormant attack surface
+Status: OPEN / NON-PRODUCTION FALLBACK
+
+Current direct service remains publication-disabled and externally unconfigured.
+
+Required:
+- keep dormant;
+- close publication and owner controls;
+- avoid treating it as production until first-party external access requirements are legitimately met.
+
+## Security / reliability acceptance matrix
+
+| Requirement | Current status |
+|---|---|
+| Exact Snapchat isolation | PASS |
+| Normal runtime human target = 0 | PASS as architecture target |
+| Current public publication authority | PASS = ZERO |
+| Fail-closed default | PASS / internal evidence |
+| Kill switch implemented | PASS implementation / independent retest NOT VERIFIED |
+| Emergency read-only implemented | PASS implementation / independent retest NOT VERIFIED |
+| Local content/business gates | PASS internal CI |
+| Saudi gate | PASS internal CI |
+| Country/global visual binding | PASS internal CI |
+| AI authenticity gate | PASS internal CI |
+| Duplicate prevention | PARTIAL |
+| Durable reconciliation | NOT VERIFIED |
+| Monitoring/logging | PARTIAL |
+| Alerting | NOT VERIFIED |
+| Secrets committed to Snapchat code | no obvious pattern found by CI; independent audit NOT VERIFIED |
+| Supply-chain vulnerability scan | NOT VERIFIED |
+| Full SBOM | NOT VERIFIED |
+| Penetration test | NOT VERIFIED |
+| ASVS L3 independent verification | NOT VERIFIED |
+| Independent code review | NOT VERIFIED |
+| Independent architecture review | NOT VERIFIED |
+| Disaster recovery test | NOT VERIFIED |
+| Backup/restore test | N/A for current stateless publication service data, but configuration/recovery test NOT VERIFIED |
+| Golden release | NOT YET — candidate only |
+| Owner recovery package | REQUIRED |
+| Recovery runbook | REQUIRED |
+| Human takeover | documented target / practical test NOT VERIFIED |
+| Cold engineer handover | NOT VERIFIED |
+| Financial transaction logic | NOT APPLICABLE |
+| Auto subscription/payment authority | NONE |
+
+## Current decision
+
+ENGINEERING_DIRECTION = VIABLE
+SNAPCHAT_INTERNAL_AUTOMATION_SUBSYSTEM = CONTINUE
+PUBLIC_SPOTLIGHT_AUTOMATION = HOLD
+REASON = no currently accepted official route satisfies every frozen owner constraint
+ROUTINE_MANUAL_POSTING = REJECTED
+PAID_AYRSHARE = REJECTED
+UNRELATED_COMMERCIAL_REGISTRY = REJECTED
+PUBLIC_SIDE_EFFECT_AUTHORITY = ZERO
+
+The subsystem must stay useful while blocked: it may validate, package, audit and prepare Snapchat-ready output, but must not silently degrade to manual routine posting or an unapproved paid/legal workaround.
