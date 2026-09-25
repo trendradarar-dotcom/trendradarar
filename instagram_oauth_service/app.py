@@ -179,6 +179,13 @@ def _complete_oauth(code, redirect_uri):
 
     short_token = token_payload["access_token"]
     app_scoped_user_id = token_payload.get("user_id")
+    raw_permissions = token_payload.get("permissions") or []
+    if isinstance(raw_permissions, str):
+        granted_permissions = [p.strip() for p in raw_permissions.split(",") if p.strip()]
+    elif isinstance(raw_permissions, list):
+        granted_permissions = [str(p).strip() for p in raw_permissions if str(p).strip()]
+    else:
+        granted_permissions = []
 
     long_response = requests.get(
         "https://graph.instagram.com/access_token",
@@ -264,6 +271,7 @@ def _complete_oauth(code, redirect_uri):
         "username": profile.get("username"),
         "account_type": account_type,
         "expires_in": expires_in,
+        "granted_permissions": granted_permissions,
         "connected_at": int(time.time()),
     }
 
@@ -503,6 +511,8 @@ textarea{{width:100%;min-height:100px}} input[type=file]{{width:100%}}
 <div class="card">
 <p><strong>Connected account:</strong> @{rec.get("username") or "unknown"}</p>
 <p><strong>Account type:</strong> {rec.get("account_type") or "unknown"}</p>
+<p><strong>Professional user ID:</strong> {rec.get("user_id") or "unknown"}</p>
+<p><strong>Granted permissions:</strong> {", ".join(rec.get("granted_permissions") or []) or "not returned by token response"}</p>
 </div>
 <div class="card">
 <form method="post" action="/api/reel" enctype="multipart/form-data">
