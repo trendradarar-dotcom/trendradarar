@@ -40,6 +40,22 @@ class DirectBridgeTests(unittest.TestCase):
             self.assertEqual(body["error"], "direct_api_disabled")
             self.assertEqual(body["external_side_effect"], "BLOCKED")
 
+    def test_validation_is_blocked_when_direct_api_disabled(self):
+        with patch.dict(os.environ, {
+            "SNAPCHAT_DIRECT_API_ENABLED": "false",
+        }, clear=True):
+            response = self.client.post("/spotlight/validate")
+            self.assertEqual(response.status_code, 503)
+            self.assertEqual(response.get_json()["error"], "direct_api_disabled")
+
+    def test_token_status_is_blocked_when_direct_api_disabled(self):
+        with patch.dict(os.environ, {
+            "SNAPCHAT_DIRECT_API_ENABLED": "false",
+        }, clear=True):
+            response = self.client.get("/admin/token-status")
+            self.assertEqual(response.status_code, 503)
+            self.assertEqual(response.get_json()["error"], "direct_api_disabled")
+
 
 if __name__ == "__main__":
     unittest.main()
