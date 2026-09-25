@@ -273,3 +273,42 @@ NEXT_EXACT_HUMAN_GATE:
 - Callback must return successfully and exact provider identity must verify.
 
 PUBLIC_INSTAGRAM_PUBLISHING = HOLD
+
+
+## Chrome Safe Browsing remediation — 2026-09-25
+
+OBSERVED_BROWSER_GATE:
+- Chrome displayed a red "Dangerous site" warning for the original browser-facing host:
+  https://trendradar-instagram-oauth.onrender.com/auth/instagram/start
+- Owner was explicitly instructed not to bypass the warning.
+- Google Safe Browsing guidance treats this warning as a security gate requiring remediation/review rather than bypass.
+
+REMEDIATION:
+- Original Instagram OAuth service remains backend-only and retains the App Secret/token handling.
+- New isolated browser gateway created:
+  https://trendradar-connect.onrender.com
+- Gateway service ID:
+  srv-dar4l3k9v7es739flr0g
+- Gateway contains no Instagram App Secret.
+- Gateway communicates with the original OAuth service server-to-server through an authenticated shared-secret header.
+- Browser-safe start route:
+  https://trendradar-connect.onrender.com/oauth/browser/start
+- Browser-safe callback:
+  https://trendradar-connect.onrender.com/oauth/browser/callback
+- Exact provider scopes preserved:
+  instagram_business_basic
+  instagram_business_content_publish
+- Exact account binding remains @trendradarar.
+- media_publish remains fail-closed.
+
+FRESH_BROWSER_VERIFICATION:
+- New gateway hostname opened without any dangerous-site warning.
+- /oauth/browser/start redirected successfully and directly to www.instagram.com.
+- No provider error text was displayed before the Instagram login screen.
+- Redirect URI in the live OAuth request:
+  https://trendradar-connect.onrender.com/oauth/browser/callback
+- Current exact human gate:
+  owner authenticates to Instagram as @trendradarar and approves the expected OAuth permissions.
+- No public publishing action is authorized.
+
+PUBLIC_INSTAGRAM_PUBLISHING = HOLD
