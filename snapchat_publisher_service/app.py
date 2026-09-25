@@ -13,7 +13,7 @@ from publisher import (
 )
 
 
-APP_VERSION = "snapchat-publisher-service-20260925.1"
+APP_VERSION = "snapchat-publisher-service-20260925.2"
 
 app = Flask(__name__)
 
@@ -68,22 +68,55 @@ def validate_spotlight():
         return denied
 
     try:
-        envelope = SpotlightEnvelope.from_dict(request.get_json(force=True) or {})
+        body = request.get_json(force=True) or {}
+        envelope = SpotlightEnvelope.from_dict(body)
+        schedule_time = body.get("schedule_time")
         errors = validate_envelope(envelope)
-        payload_preview = None
-        if not errors:
-            payload_preview = build_ayrshare_payload(
-                envelope,
-                schedule_time=request.args.get("schedule_time"),
-            )
+
+        if errors:
+            return jsonify({
+                "ok": False,
+                "errors": errors,
+                "market": envelope.market,
+                "trend_id": envelope.trend_id,
+                "publication_id": envelope.publication_id,
+                "provider_validation": "NOT_RUN",
+                "external_publication_side_effect": "NONE",
+            }), 400
+
+        payload_preview = build_ayrshare_payload(
+            envelope,
+            schedule_time=schedule_time,
+        )
+
+        publisher = selected_publisher()
+        if not publisher.api_key:
+            return jsonify({
+                "ok": True,
+                "local_validation": "PASS",
+                "provider_validation": "BLOCKED_API_KEY_NOT_CONFIGURED",
+                "market": envelope.market,
+                "trend_id": envelope.trend_id,
+                "publication_id": envelope.publication_id,
+                "provider_payload_preview": payload_preview,
+                "external_publication_side_effect": "NONE",
+            }), 200
+
+        provider_result = publisher.validate_provider(
+            envelope,
+            schedule_time=schedule_time,
+        )
         return jsonify({
-            "ok": not errors,
-            "errors": errors,
+            "ok": bool(provider_result.get("ok")),
+            "local_validation": "PASS",
+            "provider_validation": "PASS" if provider_result.get("ok") else "FAIL",
             "market": envelope.market,
             "trend_id": envelope.trend_id,
-            "provider_payload_preview": payload_preview,
+            "publication_id": envelope.publication_id,
+            "provider_result": provider_result,
             "external_publication_side_effect": "NONE",
-        }), (200 if not errors else 400)
+        }), (200 if provider_result.get("ok") else 400)
+
     except (EnvelopeValidationError, ValueError) as exc:
         return jsonify({
             "ok": False,
@@ -91,6 +124,36 @@ def validate_spotlight():
             "detail": str(exc),
             "external_publication_side_effect": "NONE",
         }), 400
+    except Exception as exc:
+        return jsonify({
+            "ok": False,
+            "error": "provider_validation_failed",
+            "detail": str(exc),
+            "external_publication_side_effect": "NONE",
+        }), 502
+
+
+@app.get("/spotlight/status/<post_id>")
+def spotlight_status(post_id):
+    denied = _require_owner()
+    if denied:
+        return denied
+    try:
+        body = selected_publisher().get_post_status(post_id)
+        return jsonify({
+            "ok": True,
+            "provider": "ayrshare",
+            "post_id": post_id,
+            "provider_status": body,
+        })
+    except PublicationGateClosed as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 403
+    except Exception as exc:
+        return jsonify({
+            "ok": False,
+            "error": "provider_status_failed",
+            "detail": str(exc),
+        }), 502
 
 
 @app.post("/spotlight/publish")
@@ -123,7 +186,7 @@ def publish_spotlight():
     except ValueError as exc:
         return jsonify({
             "ok": False,
-            "error": "invalid_schedule_time",
+            "error": "invalid_request",
             "detail": str(exc),
         }), 400
     except Exception as exc:
