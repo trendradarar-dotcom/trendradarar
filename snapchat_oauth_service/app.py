@@ -15,7 +15,7 @@ from cryptography.hazmat.primitives import padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from flask import Flask, jsonify, redirect, request
 
-APP_VERSION = "snapchat-oauth-service-20260925.2"
+APP_VERSION = "snapchat-oauth-service-20260925.3"
 AUTH_URL = "https://accounts.snapchat.com/login/oauth2/authorize"
 OAUTH_EXCHANGE_URL = "https://accounts.snapchat.com/login/oauth2/access_token"
 BUSINESS_API = "https://businessapi.snapchat.com"
@@ -404,6 +404,66 @@ def token_status():
         "expires_at": expires_at,
         "scope": scope,
     })
+
+
+@app.get("/readiness/profile-binding")
+def profile_binding_readiness():
+    blocked = _direct_connection_gate()
+    if blocked:
+        return blocked
+    profile_id = os.getenv("SNAPCHAT_PUBLIC_PROFILE_ID")
+    if not profile_id:
+        return jsonify({
+            "ok": False,
+            "binding": "NOT_CONFIGURED",
+            "allowlist": "UNKNOWN",
+            "external_publication_side_effect": "NONE",
+        }), 503
+    try:
+        token = _access_token()
+        response = requests.get(
+            f"{BUSINESS_API}/public/v1/public_profiles/{profile_id}",
+            headers=_headers(token),
+            timeout=30,
+        )
+        if response.status_code == 200:
+            payload = response.json()
+            profile = payload.get("public_profile") or payload.get("profile") or payload
+            return jsonify({
+                "ok": True,
+                "binding": "PASS",
+                "allowlist": "PASS",
+                "profile_id": profile_id,
+                "display_name": profile.get("display_name") if isinstance(profile, dict) else None,
+                "username": profile.get("username") if isinstance(profile, dict) else None,
+                "external_publication_side_effect": "NONE",
+            }), 200
+        if response.status_code == 403:
+            return jsonify({
+                "ok": False,
+                "binding": "BLOCKED",
+                "allowlist": "REQUIRED_OR_NOT_YET_ACTIVE",
+                "profile_id": profile_id,
+                "provider_http_status": 403,
+                "external_publication_side_effect": "NONE",
+            }), 403
+        return jsonify({
+            "ok": False,
+            "binding": "FAILED",
+            "allowlist": "UNKNOWN",
+            "profile_id": profile_id,
+            "provider_http_status": response.status_code,
+            "external_publication_side_effect": "NONE",
+        }), 502
+    except Exception as exc:
+        return jsonify({
+            "ok": False,
+            "binding": "FAILED",
+            "allowlist": "UNKNOWN",
+            "profile_id": profile_id,
+            "error": type(exc).__name__,
+            "external_publication_side_effect": "NONE",
+        }), 502
 
 
 @app.get("/profiles/<profile_id>")
