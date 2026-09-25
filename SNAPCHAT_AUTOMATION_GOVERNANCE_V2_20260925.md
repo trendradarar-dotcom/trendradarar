@@ -80,6 +80,11 @@ Creative Kit and profile web uploader:
 - require the user to complete the posting flow;
 - status: rejected for normal runtime because routine human publication actions must be zero.
 
+Browser/UI automation of Snapchat web:
+- rejected as a production workaround;
+- the web uploader's intended manual functionality does not grant permission to automate the service UI;
+- current Snapchat Terms restrict automated or semi-automated access unless expressly permitted.
+
 Therefore current production setting is:
 SNAPCHAT_PUBLISH_PROVIDER = disabled
 
