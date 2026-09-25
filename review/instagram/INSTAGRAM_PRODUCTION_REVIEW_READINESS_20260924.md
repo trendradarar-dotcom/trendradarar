@@ -192,3 +192,41 @@ PROVIDER_EVIDENCE = Instagram Apps and Websites > Tester Invites shows Trend Rad
 PRIOR_PENDING_ACCEPTANCE_GATE = CLOSED
 NEXT_GATE = Complete Meta app secret / Render OAuth configuration, then perform real Instagram OAuth and exact account identity verification.
 PUBLIC_INSTAGRAM_PUBLISHING = HOLD
+
+
+## Render OAuth runtime reconciliation — 2026-09-25
+
+LIVE_SERVICE = trendradar-instagram-oauth
+LIVE_DEPLOY_COMMIT = e9fec6fc35556d050c1d77e62c383d8fefeb03dc
+LIVE_DEPLOY = PASS
+HEALTH_OK = true
+INSTAGRAM_API_VERSION = v26.0
+INSTAGRAM_APP_ID = 1584158563162593
+INSTAGRAM_REDIRECT_URI = https://trendradar-instagram-oauth.onrender.com/auth/instagram/callback
+PUBLIC_BASE_URL = https://trendradar-instagram-oauth.onrender.com
+INSTAGRAM_PUBLIC_PUBLISH_AUTHORIZED = false
+SESSION_SECRET = CONFIGURED_SERVER_SIDE / NOT_EXPOSED
+
+FRESH_HEALTH_CONFIGURED = false
+
+Reconciliation:
+- App ID is configured.
+- Redirect URI is configured.
+- Public base URL is configured.
+- API version is configured.
+- Fail-closed public publishing gate is configured.
+- Session secret is configured server-side.
+- Therefore the remaining runtime configuration gate is INSTAGRAM_APP_SECRET.
+
+OWNER_SECRET_HANDLING:
+- Do not paste INSTAGRAM_APP_SECRET into chat, source code, GitHub, screenshots, or evidence.
+- Enter it directly into the Render service environment variable named INSTAGRAM_APP_SECRET.
+
+NEXT_GATE:
+1. Owner enters INSTAGRAM_APP_SECRET directly in Render.
+2. Verify /health returns configured=true.
+3. Execute real Instagram OAuth for @trendradarar.
+4. Verify exact professional account ID, username, account type, and granted scopes.
+5. Keep media_publish fail-closed.
+
+PUBLIC_INSTAGRAM_PUBLISHING = HOLD
