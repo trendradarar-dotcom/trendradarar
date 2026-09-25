@@ -4,149 +4,158 @@ PROJECT: Trend Radar / TrendHunter
 ENGINE: صياد الترند / TrendHunter
 PLATFORM: Snapchat only
 MODE: Fresh / isolated / exact-target-bound / fail-closed
-GOVERNANCE: SNAPCHAT_AUTOMATION_ARCHITECTURE_GOVERNANCE_20260925.md
+GOVERNANCE: SNAPCHAT_AUTOMATION_ARCHITECTURE_GOVERNANCE_20260925.md revision 1.1
+ASSURANCE: SNAPCHAT_ARCHITECTURE_ASSURANCE_REVIEW_20260925.md
+PUBLICATION STATE: BLOCKED
 
-## Frozen intent
+## Frozen product intent
 
-Snapchat is a fully automated TrendHunter distribution channel.
-
-Runtime:
-Trend discovery -> country routing -> local/legal filter -> original content production -> Snapchat-native visual board -> automated Spotlight publication -> performance feedback.
+TrendHunter -> country routing -> local/legal filter -> original/authentic content production -> Snapchat-native country/global visual board -> provider validation -> automated Spotlight publication -> result reconciliation -> performance feedback.
 
 Public framing:
 - Trend Radar / رادار الترند
 - «اكتشف ما يصعد الآن في بلدك والعالم»
 - country lane: «هذا ما يصعد الآن في بلدك»
-- separate selected-global-trend lane
+- separate GLOBAL_SELECTED lane
 
 Business objective:
-- account growth;
-- eventual lawful monetization;
+- grow the account;
+- reach lawful monetization eligibility;
 - zero routine human publication actions.
 
 ## Repository / isolation
 
-- Repository: `trendradarar-dotcom/trendradarar`
-- Snapchat branch: `snapchat-production-review-20260925`
+- Repository: trendradarar-dotcom/trendradarar
+- Branch: snapchat-production-review-20260925
 - Cross-project/platform source-state reuse: NONE
-- YouTube / TikTok / Instagram integrations are not imported into this Snapchat implementation.
+- Direct Snapchat OAuth service retained only as dormant fallback.
 
-## Snapchat account state
+## Snapchat account
 
-- Intended username: `trendradarar`
-- Public brand: `Trend Radar`
+- username: trendradarar
+- public brand: Trend Radar
 - Public Profile: CREATED
-- Snapchat Business Account / unrelated commercial registry: NOT REQUIRED BY DEFAULT ARCHITECTURE
-- Direct Snapchat Business OAuth path: DEFERRED FALLBACK ONLY
+- Professional Profile: REQUIRED FOR AYRSHARE LINK / NOT YET VERIFIED
+- unrelated furniture commercial registry: NOT PART OF DEFAULT ARCHITECTURE
+- Snapchat Business Account: NOT PART OF DEFAULT ARCHITECTURE
 
-## Geographic routing
+## Geographic model
 
 Arab-country lanes:
 DZ, BH, KM, DJ, EG, IQ, JO, KW, LB, LY, MR, MA, OM, PS, QA, SA, SO, SD, SY, TN, AE, YE.
 
 Separate lane:
-- `GLOBAL_SELECTED`
+- GLOBAL_SELECTED
 
-Saudi Arabia:
-- initial operating market;
-- dedicated Saudi filter is mandatory before publication.
+Saudi lane:
+- initial operating market
+- dedicated Saudi gate required before publication
 
-## Primary automated publisher
+## Primary provider architecture
 
-Selected provider: `AYRSHARE`
+Selected provider for current implementation: AYRSHARE.
 
-Reason:
-- API-first publishing path;
-- documented direct Snapchat Spotlight support;
-- account authorization is delegated through provider linking;
-- normal publication can be fully programmatic after one-time account connection.
+Verified current provider capabilities:
+- Snapchat Public/Professional Profile linking
+- direct Spotlight publication through POST /post
+- no-side-effect provider validation through POST /validate/post
+- post status read by provider post ID
+- provider idempotencyKey support
 
-The prior Sprout Social idea is NOT the selected API runtime because its public Publishing API documentation does not currently list Snapchat as a supported create-post profile type, even though the Sprout UI can schedule/publish Snapchat.
+Provider economics:
+- current public Premium price: $149/month for one social profile
+- current Launch trial: 28 days, no card required
+- any paid commitment remains owner-only
 
-## Implemented code
+## Independent assurance review
 
-New service:
-- `snapchat_publisher_service/publisher.py`
-- `snapchat_publisher_service/app.py`
-- `snapchat_publisher_service/requirements.txt`
-- `snapchat_publisher_service/test_publisher.py`
+Review mode:
+Fresh Independent + Discovery + Directed + Creative/Adversarial + Verification.
 
-Implemented gates:
-- explicit Arab-country or `GLOBAL_SELECTED` market;
-- Arabic activation;
-- Saudi filter required for SA;
-- explicit global-selection flag for GLOBAL_SELECTED;
-- originality PASS;
-- rights PASS;
-- HTTPS media URL;
-- monetization-oriented internal duration target 30-60 seconds;
-- minimum 540x960;
-- 9:16 target;
-- Spotlight description <=160 characters;
-- publication environment gate default CLOSED;
-- provider key absent => publication BLOCKED.
+Review commit:
+- 6cb3af96edb6d54933e0c53d196b3b8779e18298
 
-## Render deployment
+Findings discovered:
+- F1 Professional Profile requirement
+- F2 missing provider-side validation
+- F3 missing duplicate/idempotency controls
+- F4 missing provider status feedback implementation
+- F5 unsafe Python bool coercion
+- F6 Snapchat 2026 human-origin/authenticity requirement not executable
+- F7 tests committed but no execution evidence
+- F8 provider cost is a material business dependency
+- F9 visual-board contract not machine-verified
+- F10 monetization has additional audience/compliance conditions
+
+## Remediation implemented
+
+Publisher hardening commit:
+- 7cf202902b2651db180aad52f1d33c03c0127dde
+
+Implemented:
+- strict native-JSON boolean PASS semantics
+- stable publication_id
+- deterministic Ayrshare idempotencyKey
+- process serialization for same publication_id
+- explicit human_origin_passed gate
+- explicit visual_template_id gate
+- provider POST /validate/post support
+- provider GET /post/{id} status support
+
+API wiring commit:
+- 8ccee27c0e5d678c66de21cb4f300c5b6b126fdf
+
+Implemented:
+- local + provider validation path
+- read-only provider status endpoint
+- publication remains fail-closed
+
+Expanded tests commit:
+- 3bc01f001cef31d6359d5bf89d8eb912cad9fedc
+
+Governance reconciliation commit:
+- f693486ed71fbf0151b7f65521bebbee072e8d50
+
+## Render
 
 Service:
-- `trendradar-snapchat-publisher`
-- Service ID: `srv-dar6s0vavr4c7380epmg`
-- URL: `https://trendradar-snapchat-publisher.onrender.com`
-- Region: Frankfurt
-- Branch: `snapchat-production-review-20260925`
-- Runtime: Python
-- Start command: `gunicorn --chdir snapchat_publisher_service app:app`
-- Deploy: `dep-dar6s3ekjc1c73b5uc90`
-- Deploy state: LIVE
+- trendradar-snapchat-publisher
+- ID: srv-dar6s0vavr4c7380epmg
+- URL: https://trendradar-snapchat-publisher.onrender.com
+- region: Frankfurt
+- branch: snapchat-production-review-20260925
 
-External health verification:
-- `ok=true`
-- version=`snapchat-publisher-service-20260925.1`
-- provider=`ayrshare`
-- `api_key_configured=false`
-- `publication_enabled=false`
-- `supported_runtime_human_actions=0`
-- all 22 Arab-country market codes + `GLOBAL_SELECTED` exposed in readiness.
+Latest hardened deploy requested:
+- dep-dar7dih42hec73d99o8g
+- target commit: f693486ed71fbf0151b7f65521bebbee072e8d50
+- current observed state at this readiness update: UPDATE_IN_PROGRESS
 
-## Provider setup state
+Previous live service remains fail-closed:
+- AYRSHARE_API_KEY not configured
+- SNAPCHAT_PUBLICATION_ENABLED=false
 
-Ayrshare:
-- existing account for `trendradarar@gmail.com`: NOT FOUND
-- signup route: AVAILABLE
-- no account was created automatically because account creation / provider terms / any trial or financial commitment are owner-only setup gates.
-- no card or paid subscription was started.
-- no API key exists yet.
-- no Snapchat account has been linked to Ayrshare yet.
+## Remaining assurance gates
 
-## Direct Snapchat Public Profile API fallback
+HOLD remains in force until:
+1. hardened deploy reaches LIVE;
+2. exact-target automated tests have executed with PASS evidence;
+3. existing Snapchat Public Profile is switched to Professional Profile;
+4. provider account is created/authorized without invented legal identity;
+5. exact trendradarar account binding is verified;
+6. API key is stored only as a Render secret;
+7. provider /validate/post passes with no publication;
+8. exact-account read-only verification passes;
+9. production publication is explicitly authorized;
+10. SNAPCHAT_PUBLICATION_ENABLED is intentionally changed to true.
 
-Existing service remains:
-- `snapchat_oauth_service`
+No live/random Snapchat post has been sent.
 
-It is now a contingency path only.
-It remains fail-closed and MUST NOT force use of an unrelated legal business registry.
+## Growth / monetization constraints
 
-## Publication state
+Current Snapchat first-party rules include:
+- wholly AI-generated videos are not eligible for Spotlight recommendation;
+- revenue-eligible Spotlight videos must be at least 30 seconds;
+- current program eligibility also includes original advertiser-friendly content, eligible-country residence, Snap Star status, 50,000 followers, and 15,000 view-hours in 28 days including 3,000 Spotlight hours;
+- Saudi Arabia is currently payout-eligible.
 
-PUBLIC SPOTLIGHT PUBLICATION = BLOCKED.
-
-Reason:
-1. Ayrshare account not yet created/authorized.
-2. Snapchat Public Profile not yet linked to provider.
-3. Ayrshare API key not yet configured.
-4. exact provider-side binding to `trendradarar` not yet verified.
-5. production publication gate remains `false`.
-
-No random or live test post has been sent.
-
-## Next external-only gate
-
-One-time provider onboarding is the only remaining external blocker:
-- create/sign in to Ayrshare;
-- connect Snapchat Public/Professional Profile;
-- authorize access;
-- obtain API key into Render secret configuration.
-
-After that, TrendHunter publication is designed to run with 0 routine human actions.
-
-No commercial registry, furniture-business identity, or Snapchat Business Account is part of the default path.
+Therefore the automation target is not merely technically publishable content. It is recommendation-oriented, authentic, rights-safe, country-aware content designed for sustainable growth.
