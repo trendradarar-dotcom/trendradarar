@@ -5,47 +5,20 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow">
 <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0">
-<meta http-equiv="Pragma" content="no-cache">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src https://trendradar-connect.onrender.com; img-src data:; base-uri 'none'; form-action 'none'">
 <title>ربط Instagram — رادار الترند</title>
 <style>
 body{font-family:system-ui,-apple-system,Segoe UI,Arial,sans-serif;background:#0b1020;color:#fff;margin:0;min-height:100vh;display:grid;place-items:center}
 main{width:min(92vw,620px);background:#121a31;border:1px solid #2a3558;border-radius:18px;padding:28px;box-sizing:border-box}
-h1{margin-top:0}p{line-height:1.8;color:#d9e0f3}.status{padding:12px 14px;border-radius:12px;background:#0d1428;margin:16px 0}
-button{width:100%;padding:14px 18px;border:0;border-radius:12px;font-size:17px;font-weight:700;cursor:pointer;background:#fff;color:#111}
-button[disabled]{opacity:.55;cursor:wait}small{display:block;margin-top:18px;color:#aab6d3}
+h1{margin-top:0}p{line-height:1.8;color:#d9e0f3}.btn{display:block;text-align:center;padding:14px 18px;border-radius:12px;font-size:17px;font-weight:700;background:#fff;color:#111;text-decoration:none}
+small{display:block;margin-top:18px;color:#aab6d3}
 </style>
 </head>
 <body>
 <main>
 <h1>ربط Instagram مع رادار الترند</h1>
-<p>سيتم نقلك مباشرة إلى Instagram، ثم تعود إلى نطاق رادار الترند للتحقق من الحساب.</p>
-<div id="status" class="status">جاهز لبدء الربط.</div>
-<button id="connect">متابعة إلى Instagram</button>
-<small>النشر العام معطّل. لا يتم عرض App Secret أو Access Token في المتصفح.</small>
+<p>سيتم نقلك إلى بوابة Trend Radar الآمنة، ثم مباشرة إلى Instagram. لن يتم استخدام المضيف السابق الذي ظهر عليه تحذير Chrome.</p>
+<a class="btn" href="https://trendradar-connect.onrender.com/oauth/browser/start">متابعة إلى Instagram</a>
+<small>النشر العام معطّل، ولا يتم عرض App Secret أو Access Token في المتصفح.</small>
 </main>
-<script>
-const gateway = "https://trendradar-connect.onrender.com";
-const button = document.getElementById("connect");
-const statusBox = document.getElementById("status");
-button.addEventListener("click", async () => {
-  button.disabled = true;
-  statusBox.textContent = "جارٍ تجهيز رابط التفويض...";
-  try {
-    const response = await fetch(gateway + "/oauth/start", {
-      method: "GET",
-      mode: "cors",
-      cache: "no-store",
-      headers: {"Accept":"application/json"}
-    });
-    const data = await response.json();
-    if (!response.ok || !data.authorization_url) throw new Error(data.error || "START_FAILED");
-    location.replace(data.authorization_url);
-  } catch (error) {
-    statusBox.textContent = "تعذر بدء الربط الآن. لم يتم تجاوز أي تحذير أمني.";
-    button.disabled = false;
-  }
-});
-</script>
 </body>
 </html>
