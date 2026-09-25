@@ -48,6 +48,10 @@ jobs:
         working-directory: snapchat_publisher_service
         run: python -m unittest discover -v -p "test_*.py"
 
+      - name: Run dormant direct-bridge fail-closed tests
+        working-directory: snapchat_oauth_service
+        run: python -m unittest discover -v -p "test_*.py"
+
       - name: Verify no obvious credential material is committed
         shell: bash
         run: |
