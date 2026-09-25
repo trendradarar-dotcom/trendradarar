@@ -24,6 +24,7 @@ Therefore this bridge is retained for future legitimate first-party access and i
 
 When SNAPCHAT_DIRECT_API_ENABLED=false:
 - OAuth start/callback are blocked;
+- token-status and validation routes are blocked;
 - external Public Profile reads are blocked;
 - Spotlight status reads are blocked;
 - Spotlight publication is blocked.
@@ -83,8 +84,9 @@ Closed unless direct API is intentionally enabled:
 - GET /spotlight/status/{spotlight_id}
 - POST /spotlight/publish
 
-Owner metadata endpoint:
+Also closed while the direct API is disabled:
 - GET /admin/token-status
+- POST /spotlight/validate
 
 ## Media mechanics retained for future first-party activation
 
