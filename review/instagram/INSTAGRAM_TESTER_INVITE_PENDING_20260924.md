@@ -1,4 +1,4 @@
-# Instagram Tester Invitation — Pending Acceptance — 2026-09-24
+# Instagram Tester Invitation — Accepted — 2026-09-25
 
 PROJECT = TrendHunter / Trend Radar
 BRANCH = instagram-production-review-20260924
@@ -7,23 +7,22 @@ META_APP_ID = 1584158563162593
 INSTAGRAM_ACCOUNT = @trendradarar
 INSTAGRAM_ACCOUNT_TYPE = BUSINESS
 INSTAGRAM_TESTER_ROLE = INVITED
-INSTAGRAM_TESTER_STATUS = PENDING_ACCEPTANCE
+INSTAGRAM_TESTER_STATUS = ACCEPTED
 
-Provider/UI evidence:
-- Meta App Roles > Instagram Testers shows `trendradarar`.
-- Status displayed by Meta: Pending.
-- Meta UI indicates Instagram users manage invitations from Apps and Websites in their Instagram profile.
+Fresh provider/UI evidence — 2026-09-25:
+- Instagram > Apps and Websites > Tester Invites shows `Trend Radar-IG`.
+- The Instagram UI states that the app was authorized by the account on 24 September 2026.
+- A `Remove` control is present, which is consistent with an active accepted authorization rather than a pending invitation.
+- Therefore the prior `PENDING_ACCEPTANCE` gate is closed.
 
-Runtime verification:
+Runtime service:
 - Render service: trendradar-instagram-oauth
 - Service ID: srv-daqed80u01pc73fs6rgg
 - URL: https://trendradar-instagram-oauth.onrender.com
-- Latest known deploy: a58e05d85c7e550dd829797631ebf8a165c113b5
-- Deploy reached LIVE.
-- Gunicorn started successfully and GET / returned HTTP 200.
 
 GOVERNING NEXT GATE:
-Owner must accept the Instagram Tester invitation while authenticated as @trendradarar.
-Do not repeat app creation, Business conversion, tester invitation, or prior M26 work.
+- Do not repeat app creation, Business conversion, tester invitation, or tester acceptance.
+- Proceed to complete Meta app secret / OAuth service configuration, then execute the real Instagram OAuth identity verification flow.
+- Public publication remains fail-closed until separately authorized.
 
 PUBLIC_INSTAGRAM_PUBLISHING = HOLD
