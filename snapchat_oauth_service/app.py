@@ -15,7 +15,7 @@ from cryptography.hazmat.primitives import padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from flask import Flask, jsonify, redirect, request
 
-APP_VERSION = "snapchat-oauth-service-20260925.1"
+APP_VERSION = "snapchat-oauth-service-20260925.2"
 AUTH_URL = "https://accounts.snapchat.com/login/oauth2/authorize"
 TOKEN_URL = "https://accounts.snapchat.com/login/oauth2/access_token"
 BUSINESS_API = "https://businessapi.snapchat.com"
@@ -40,6 +40,26 @@ def _env_bool(name: str, default: bool = False) -> bool:
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _direct_connection_gate():
+    if not _env_bool("SNAPCHAT_DIRECT_API_ENABLED", False):
+        return jsonify({
+            "ok": False,
+            "error": "direct_api_disabled",
+            "external_side_effect": "BLOCKED",
+        }), 503
+    return None
+
+
+def _publication_control_gate():
+    if not _env_bool("SNAPCHAT_PUBLICATION_ENABLED", False):
+        return jsonify({"ok": False, "error": "publication_gate_closed", "external_publication_side_effect": "BLOCKED"}), 403
+    if _env_bool("SNAPCHAT_KILL_SWITCH", True):
+        return jsonify({"ok": False, "error": "kill_switch_active", "external_publication_side_effect": "BLOCKED"}), 403
+    if _env_bool("SNAPCHAT_EMERGENCY_READ_ONLY", True):
+        return jsonify({"ok": False, "error": "emergency_read_only_active", "external_publication_side_effect": "BLOCKED"}), 403
+    return None
 
 
 def _required_env(*names):
@@ -166,7 +186,7 @@ def _snap_json(response: requests.Response):
     except Exception:
         payload = {"raw": response.text[:2000]}
     if response.status_code >= 400:
-        raise RuntimeError(f"snap_http_{response.status_code}:{payload}")
+        raise RuntimeError(f"snap_http_{response.status_code}")
     return payload
 
 
@@ -283,7 +303,10 @@ def index():
         "service": "Trend Radar Snapchat Public Profile API bridge",
         "version": APP_VERSION,
         "scope": SCOPE,
+        "direct_api_enabled": _env_bool("SNAPCHAT_DIRECT_API_ENABLED", False),
         "publication_enabled": _env_bool("SNAPCHAT_PUBLICATION_ENABLED", False),
+        "kill_switch": _env_bool("SNAPCHAT_KILL_SWITCH", True),
+        "emergency_read_only": _env_bool("SNAPCHAT_EMERGENCY_READ_ONLY", True),
         "public_side_effect_default": "BLOCKED",
     })
 
@@ -301,13 +324,19 @@ def health():
             "profile_id": bool(os.getenv("SNAPCHAT_PUBLIC_PROFILE_ID")),
             "refresh_token": bool(os.getenv("SNAPCHAT_REFRESH_TOKEN") or _runtime_tokens.get("refresh_token")),
             "owner_key": bool(os.getenv("SNAPCHAT_OWNER_KEY")),
+            "direct_api_enabled": _env_bool("SNAPCHAT_DIRECT_API_ENABLED", False),
             "publication_enabled": _env_bool("SNAPCHAT_PUBLICATION_ENABLED", False),
+            "kill_switch": _env_bool("SNAPCHAT_KILL_SWITCH", True),
+            "emergency_read_only": _env_bool("SNAPCHAT_EMERGENCY_READ_ONLY", True),
         },
     })
 
 
 @app.get("/auth/start")
 def auth_start():
+    blocked = _direct_connection_gate()
+    if blocked:
+        return blocked
     missing = _required_env("SNAPCHAT_CLIENT_ID", "SNAPCHAT_REDIRECT_URI", "SNAPCHAT_STATE_SECRET")
     if missing:
         return jsonify({"ok": False, "error": "missing_configuration", "missing": missing}), 503
@@ -324,6 +353,9 @@ def auth_start():
 
 @app.get("/auth/callback")
 def auth_callback():
+    blocked = _direct_connection_gate()
+    if blocked:
+        return blocked
     missing = _required_env("SNAPCHAT_CLIENT_ID", "SNAPCHAT_CLIENT_SECRET", "SNAPCHAT_REDIRECT_URI", "SNAPCHAT_STATE_SECRET")
     if missing:
         return jsonify({"ok": False, "error": "missing_configuration", "missing": missing}), 503
@@ -339,9 +371,9 @@ def auth_callback():
     try:
         payload = _exchange_code(code)
     except requests.HTTPError as exc:
-        return jsonify({"ok": False, "error": "token_exchange_failed", "status": exc.response.status_code, "body": exc.response.text[:1000]}), 502
-    except Exception as exc:
-        return jsonify({"ok": False, "error": "token_exchange_failed", "detail": str(exc)}), 502
+        return jsonify({"ok": False, "error": "token_exchange_failed", "status": exc.response.status_code}), 502
+    except Exception:
+        return jsonify({"ok": False, "error": "token_exchange_failed"}), 502
 
     return jsonify({
         "ok": True,
@@ -378,6 +410,9 @@ def token_status():
 
 @app.get("/profiles/<profile_id>")
 def get_profile(profile_id):
+    blocked = _direct_connection_gate()
+    if blocked:
+        return blocked
     denied = _require_owner()
     if denied:
         return denied
@@ -389,8 +424,8 @@ def get_profile(profile_id):
             timeout=30,
         )
         return jsonify(_snap_json(response)), response.status_code
-    except Exception as exc:
-        return jsonify({"ok": False, "error": "profile_read_failed", "detail": str(exc)}), 502
+    except Exception:
+        return jsonify({"ok": False, "error": "profile_read_failed"}), 502
 
 
 @app.post("/spotlight/validate")
@@ -430,6 +465,9 @@ def validate_spotlight():
 
 @app.get("/spotlight/status/<spotlight_id>")
 def spotlight_status(spotlight_id):
+    blocked = _direct_connection_gate()
+    if blocked:
+        return blocked
     denied = _require_owner()
     if denied:
         return denied
@@ -444,21 +482,21 @@ def spotlight_status(spotlight_id):
             timeout=30,
         )
         return jsonify(_snap_json(response)), response.status_code
-    except Exception as exc:
-        return jsonify({"ok": False, "error": "spotlight_status_failed", "detail": str(exc)}), 502
+    except Exception:
+        return jsonify({"ok": False, "error": "spotlight_status_failed"}), 502
 
 
 @app.post("/spotlight/publish")
 def spotlight_publish():
+    blocked = _direct_connection_gate()
+    if blocked:
+        return blocked
     denied = _require_owner()
     if denied:
         return denied
-    if not _env_bool("SNAPCHAT_PUBLICATION_ENABLED", False):
-        return jsonify({
-            "ok": False,
-            "error": "publication_gate_closed",
-            "external_publication_side_effect": "BLOCKED",
-        }), 403
+    blocked = _publication_control_gate()
+    if blocked:
+        return blocked
 
     profile_id = os.getenv("SNAPCHAT_PUBLIC_PROFILE_ID")
     if not profile_id:
@@ -496,8 +534,12 @@ def spotlight_publish():
             "profile_id": profile_id,
             "initial_provider_state": "SUBMITTED_EXPECTED",
         }), 201
-    except Exception as exc:
-        return jsonify({"ok": False, "error": "spotlight_publish_failed", "detail": str(exc)}), 502
+    except Exception:
+        return jsonify({
+            "ok": False,
+            "error": "spotlight_publish_failed",
+            "external_publication_side_effect": "UNKNOWN_REQUIRES_RECONCILIATION",
+        }), 502
 
 
 if __name__ == "__main__":
