@@ -1,79 +1,104 @@
-# Trend Radar — Snapchat Public Profile API Bridge
+# Trend Radar — Snapchat Direct Public Profile API Bridge
 
-Isolated Snapchat integration for Trend Radar / TrendHunter.
+STATUS: DORMANT FIRST-PARTY FALLBACK
+SCOPE: Snapchat only
 
-## Isolation contract
+This bridge targets Snapchat Public Profile API directly.
 
-- Branch: `snapchat-production-review-20260925`
-- Base: `main` at `2655e2a221540e63a35d49f6ba76bd479cbbb800`
-- No TikTok, Instagram, or YouTube credentials, tokens, evidence, callback URLs, or runtime state are reused.
-- Public publishing is **closed by default**. `SNAPCHAT_PUBLICATION_ENABLED` must remain `false` until external Snapchat gates and exact profile binding are complete.
+It is NOT the current production publication route because the current official first-party access model requires a Snapchat Business Account / Organization, an OAuth App created in Snapchat Business, and Public Profile API allowlisting.
 
-## Official integration path
+The owner has frozen these constraints:
+- do not invent a legal business entity;
+- do not use the unrelated furniture commercial registry;
+- do not add a misleading business setup merely to bypass an API gate;
+- do not fall back to routine manual posting.
 
-This service targets Snapchat **Public Profile API**, not Creative Kit.
+Therefore this bridge is retained for future legitimate first-party access and is closed by default.
 
-1. Create a Snapchat Business Account / Organization.
-2. Create the OAuth App from **Business Dashboard → Business Details**. Do not create the OAuth App in the Snap Kit Developer Portal for this API.
-3. Configure the exact redirect URI served by this service.
-4. Request Public Profile API allowlisting for the OAuth client ID. Never send the client secret in the allowlist request.
-5. Complete OAuth with scope `snapchat-profile-api`.
-6. Bind the exact `SNAPCHAT_PUBLIC_PROFILE_ID`.
-7. Run read-only verification.
-8. Only after approval and owner/publication gates are satisfied may `SNAPCHAT_PUBLICATION_ENABLED=true` be set.
+## Safe default controls
 
-Official docs:
-- https://developers.snap.com/marketing-api/Public-Profile-API/GetStarted
-- https://developers.snap.com/marketing-api/Public-Profile-API/ProfileAssetManagement
-- https://developers.snap.com/marketing-api/Ads-API/authentication
+- SNAPCHAT_DIRECT_API_ENABLED=false
+- SNAPCHAT_PUBLICATION_ENABLED=false
+- SNAPCHAT_KILL_SWITCH=true
+- SNAPCHAT_EMERGENCY_READ_ONLY=true
 
-## Environment variables
+When SNAPCHAT_DIRECT_API_ENABLED=false:
+- OAuth start/callback are blocked;
+- external Public Profile reads are blocked;
+- Spotlight status reads are blocked;
+- Spotlight publication is blocked.
 
-Required for OAuth:
-- `SNAPCHAT_CLIENT_ID`
-- `SNAPCHAT_CLIENT_SECRET`
-- `SNAPCHAT_REDIRECT_URI`
-- `SNAPCHAT_STATE_SECRET`
+Publication additionally requires:
+- SNAPCHAT_PUBLICATION_ENABLED=true
+- SNAPCHAT_KILL_SWITCH=false
+- SNAPCHAT_EMERGENCY_READ_ONLY=false
+- exact profile binding and credentials.
 
-Required for protected owner endpoints:
-- `SNAPCHAT_OWNER_KEY`
+## Official route if legitimately activated later
 
-Set after exact account/profile binding:
-- `SNAPCHAT_PUBLIC_PROFILE_ID`
+1. Establish the legitimate Snapchat Business Account / Organization required by the provider.
+2. Create the OAuth App from Snapchat Business, not Snap Kit Developer Portal.
+3. Configure the exact redirect URI.
+4. Obtain Public Profile API allowlisting for the OAuth client.
+5. Complete OAuth with scope snapchat-profile-api.
+6. Bind the exact owned profile.
+7. Perform read-only verification.
+8. Complete independent/security acceptance.
+9. Open publication controls intentionally.
+
+## Configuration names
+
+Connection:
+- SNAPCHAT_CLIENT_ID
+- SNAPCHAT_CLIENT_SECRET
+- SNAPCHAT_REDIRECT_URI
+- SNAPCHAT_STATE_SECRET
+- SNAPCHAT_PUBLIC_PROFILE_ID
+
+Protected owner API:
+- SNAPCHAT_OWNER_KEY
 
 Optional token bootstrap:
-- `SNAPCHAT_REFRESH_TOKEN`
-- `SNAPCHAT_ACCESS_TOKEN` (short-lived; not recommended for durable operation)
+- SNAPCHAT_REFRESH_TOKEN
+- SNAPCHAT_ACCESS_TOKEN
 
-Publication gate:
-- `SNAPCHAT_PUBLICATION_ENABLED=false` (default and required during setup/review)
+Control:
+- SNAPCHAT_DIRECT_API_ENABLED
+- SNAPCHAT_PUBLICATION_ENABLED
+- SNAPCHAT_KILL_SWITCH
+- SNAPCHAT_EMERGENCY_READ_ONLY
+
+Credential values must not be committed to the repository.
 
 ## Endpoints
 
-- `GET /health` — non-secret configuration health.
-- `GET /auth/start` — starts OAuth.
-- `GET /auth/callback` — exchanges code; tokens are never returned to the browser.
-- `GET /admin/token-status` — protected token metadata/fingerprints only.
-- `GET /profiles/<profile_id>` — protected read-only profile check.
-- `POST /spotlight/validate` — validates basic request fields without publishing.
-- `GET /spotlight/status/<spotlight_id>` — protected read-only status check.
-- `POST /spotlight/publish` — protected and additionally blocked unless the publication gate is explicitly opened.
+Always available:
+- GET /health
+- GET /
 
-## Spotlight constraints implemented from current official docs
+Closed unless direct API is intentionally enabled:
+- GET /auth/start
+- GET /auth/callback
+- GET /profiles/{profile_id}
+- GET /spotlight/status/{spotlight_id}
+- POST /spotlight/publish
 
-- MP4 video.
-- 6–60 seconds.
-- Minimum 540×960.
-- Description up to 160 characters.
-- Media encrypted with AES-256-CBC before upload.
-- Multipart upload chunks up to 32 MB.
-- Provider upload supports up to 1 GB.
+Owner metadata endpoint:
+- GET /admin/token-status
 
-The service validates file type, request size, locale shape, and description length. Duration/resolution probing remains a separate pre-publication media pipeline responsibility.
+## Media mechanics retained for future first-party activation
 
-## Run
+The bridge retains:
+- MP4 request validation;
+- description length validation;
+- AES-256-CBC media encryption;
+- multipart encrypted media upload;
+- Spotlight create request;
+- provider status query.
 
-```bash
-pip install -r snapchat_oauth_service/requirements.txt
-gunicorn --chdir snapchat_oauth_service app:app
-```
+The active Trend Radar content-policy gates live in the provider-neutral publisher layer. This direct bridge must not be promoted to production by itself without those gates and a fresh exact-target review.
+
+Official documentation:
+- https://developers.snap.com/marketing-api/Public-Profile-API/GetStarted
+- https://developers.snap.com/marketing-api/Public-Profile-API/ProfileAssetManagement
+- https://developers.snap.com/marketing-api/Ads-API/authentication
