@@ -343,3 +343,54 @@ Completing the Business Account opening flow requires real owner/legal facts and
 Engineering consequence:
 - current autonomous publication remains safely blocked;
 - the existing direct Public Profile API bridge remains the correct no-recurring-publisher-fee technical target once this one-time external gate is legitimately completed and the OAuth client is allowlisted.
+
+
+## 13. External access gate progression — 2026-09-26 02:22+03
+
+This section supersedes the stale provider-state assumptions in Section 12 and the earlier form of BLOCKER A.
+
+Verified completed:
+- Snapchat Business Account opening: PASS.
+- OAuth App created in Snapchat Business Manager: PASS.
+- OAuth App name: Trend Radar Snapchat API.
+- Redirect URI: https://trendradar-snapchat-oauth.onrender.com/auth/callback
+- OAuth authorization on owned account Trend Radar / trendradarar: PASS.
+- OAuth scope: snapchat-profile-api / Public Profile APIs.
+- Refresh token received by the bridge: PASS.
+- Exact owned Public Profile discovered and bound internally:
+  - profile name: Trend Radar
+  - username: trendradarar
+  - public profile id: 3f5d8925-0da7-4da6-9b87-d8aa326026a0
+- Direct first-party bridge configured with client credentials in Render secret configuration.
+- Public publication remains CLOSED.
+- Kill switch remains ACTIVE.
+- Emergency read-only remains ACTIVE.
+
+Public Profile API allowlisting:
+- Official documentation requires client-ID allowlisting.
+- A manual Snapchat Business Support case has now been created for allowlisting.
+- Case ID: 05660464
+- Support account selected: Ali Awwad Alebrahim Self Service.
+- Support form subject was routed under CAPI by the support assistant, but the submitted description explicitly requests Public Profile API allowlisting and explicitly states that Ads API access is not requested.
+- Business Help AI conversation transcript is attached to the case.
+- Current expected response: support follow-up / manual review.
+
+Current exact external gate:
+PUBLIC_PROFILE_API_ALLOWLIST_REVIEW = PENDING_SNAP_SUPPORT
+
+Current engineering state:
+- DIRECT_FIRST_PARTY_AUTOMATION = READY_FOR_ALLOWLIST_VERIFICATION
+- PUBLICATION_AUTHORITY = 0
+- MAXIMUM_CURRENT_PUBLICATION_BLAST_RADIUS = 0
+- SNAPCHAT_PUBLICATION_ENABLED = false
+- SNAPCHAT_KILL_SWITCH = true
+- SNAPCHAT_EMERGENCY_READ_ONLY = true
+
+Next action after Snap replies:
+1. verify allowlist status with a no-publication profile-binding/read-only call;
+2. verify exact account binding to trendradarar;
+3. retain publication closed;
+4. complete remaining reliability / recovery / independent assurance gates;
+5. only after evidence-based PASS may production publication authority be considered.
+
+No live Snapchat content was published during onboarding or support-case creation.
