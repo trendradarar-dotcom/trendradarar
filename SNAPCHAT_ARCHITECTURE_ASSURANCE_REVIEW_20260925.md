@@ -234,3 +234,28 @@ Therefore:
 - the project must wait for a supported first-party/API route compatible with the frozen constraints rather than silently bypass the access model.
 
 This finding strengthens the current HOLD_EXTERNAL_ACCESS_MODEL decision.
+
+### S14 — Oversized request error semantics were wrong
+Status: CLOSED BY REMEDIATION / INTERNAL RETEST PASS AT 77520f0a231648b57c79d6e2712657a7a7f227d6
+
+Discovery:
+- an adversarial API test sent a JSON request above the publisher's 64 KiB limit;
+- Flask/Werkzeug correctly raised RequestEntityTooLarge;
+- the broad application exception handler incorrectly converted that fail-closed 413 into a 502 provider-validation error.
+
+Risk:
+- incorrect incident classification;
+- misleading monitoring/alerting;
+- possible confusion between local rejection and external-provider failure.
+
+Remediation:
+- explicitly catch RequestEntityTooLarge in validation and publication routes;
+- return HTTP 413 / request_too_large;
+- record external_publication_side_effect=NONE;
+- retain correlation/audit evidence.
+
+Retest:
+- exact CI run 36148628478 on commit 77520f0a231648b57c79d6e2712657a7a7f227d6 = SUCCESS.
+
+This finding demonstrates why negative/adversarial tests are required even when the service is already fail-closed.
+
