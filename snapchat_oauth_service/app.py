@@ -389,6 +389,9 @@ def auth_callback():
 
 @app.get("/admin/token-status")
 def token_status():
+    blocked = _direct_connection_gate()
+    if blocked:
+        return blocked
     denied = _require_owner()
     if denied:
         return denied
@@ -430,6 +433,9 @@ def get_profile(profile_id):
 
 @app.post("/spotlight/validate")
 def validate_spotlight():
+    blocked = _direct_connection_gate()
+    if blocked:
+        return blocked
     denied = _require_owner()
     if denied:
         return denied
