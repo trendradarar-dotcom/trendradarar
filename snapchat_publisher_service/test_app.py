@@ -105,6 +105,20 @@ class AppTests(unittest.TestCase):
             self.assertEqual(response.headers["Cache-Control"], "no-store")
             self.assertEqual(response.headers["X-Content-Type-Options"], "nosniff")
 
+    def test_oversized_json_request_is_rejected(self):
+        with patch.dict(os.environ, {
+            "SNAPCHAT_PUBLISH_PROVIDER": "disabled",
+            "SNAPCHAT_OWNER_KEY": "unit-test-key",
+        }, clear=True):
+            body = valid_body()
+            body["headline"] = "x" * (70 * 1024)
+            response = self.client.post(
+                "/spotlight/validate",
+                json=body,
+                headers={"X-Owner-Key": "unit-test-key"},
+            )
+            self.assertEqual(response.status_code, 413)
+
 
 if __name__ == "__main__":
     unittest.main()
