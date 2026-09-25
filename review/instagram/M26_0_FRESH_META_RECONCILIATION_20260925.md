@@ -127,3 +127,43 @@ NEXT MACHINE ACTION AFTER PROVIDER EVIDENCE:
 - Fresh OAuth retest.
 - Close M26.0-F1 only on provider evidence.
 - Then proceed to M26.1 Architecture Freeze.
+
+
+## Fresh provider evidence — 2026-09-26
+
+OWNER_META_DEVELOPER_ACCESS = RESTORED
+META_APP_NAME = Trend Radar
+META_APP_ID = 1584158563162593
+
+DIRECT_PROVIDER_PAGE:
+Meta Developer App -> Instagram API -> API setup with Instagram login
+
+INSTAGRAM_APP_NAME = Trend Radar-IG
+INSTAGRAM_APP_ID = 1358113199729841
+INSTAGRAM_APP_SECRET = PRESENT_ON_PROVIDER_PAGE_BUT_VALUE_NOT_RECORDED
+
+FRESH_RENDER_UPDATE:
+INSTAGRAM_APP_ID = 1358113199729841
+Render deploy = LIVE
+/health = configured=true
+PUBLIC_INSTAGRAM_PUBLISH_AUTHORIZED = false
+
+FRESH_OAUTH_START_RETEST:
+RESULT = PASS
+Observed provider gate = standard Instagram login page
+Observed platform_app_id = 1358113199729841
+Observed client_id = 1358113199729841
+Previous provider error "Invalid platform app" = NOT PRESENT
+
+M26.0-F1 APP_ID_IDENTITY_COLLISION:
+ROOT_CAUSE = CONFIRMED
+APP_ID_CORRECTION = PASS
+FINDING_STATUS = PARTIALLY_CLOSED_PENDING_SECRET_AND_CALLBACK_VERIFICATION
+
+Remaining completion evidence:
+- Confirm the Instagram App Secret from the same Instagram Login setup is the value entered directly into Render; never record the secret value.
+- Confirm exact OAuth redirect URI against provider configuration.
+- Complete OAuth callback.
+- Verify exact provider identity @trendradarar, BUSINESS/MEDIA_CREATOR, professional user ID.
+- Reconcile requested and granted scopes.
+- Keep PUBLIC_INSTAGRAM_PUBLISH_AUTHORIZED=false.
