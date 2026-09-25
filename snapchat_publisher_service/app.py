@@ -20,6 +20,7 @@ from publisher import (
 APP_VERSION = "snapchat-publisher-service-20260925.3"
 
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 64 * 1024
 
 
 @app.before_request
