@@ -250,3 +250,26 @@ NEXT_EXACT_GATE:
 - media_publish remains disabled.
 
 PUBLIC_INSTAGRAM_PUBLISHING = HOLD
+
+
+## Instagram OAuth owner-friction reduction — 2026-09-25
+
+COMMIT = 12ac85b0c5a1750721bf717afa8ec6d8706fbef3
+LIVE_DEPLOY = PASS
+HEALTH_CONFIGURED = true
+PUBLIC_PUBLISH_AUTHORIZED = false
+INSTAGRAM_EXPECTED_USERNAME = trendradarar
+
+CHANGES:
+- Removed forced Instagram reauthentication from the OAuth authorization request so an existing authenticated Instagram browser session may be reused.
+- Added fail-closed exact username binding after provider callback.
+- OAuth callback now rejects an authenticated account whose returned username is not exactly @trendradarar.
+- Professional-account and user_id verification remain mandatory.
+- Public media_publish remains disabled.
+
+NEXT_EXACT_HUMAN_GATE:
+- Open /auth/instagram/start in the owner browser that is already authenticated to @trendradarar.
+- Review/approve the expected Instagram permissions.
+- Callback must return successfully and exact provider identity must verify.
+
+PUBLIC_INSTAGRAM_PUBLISHING = HOLD
