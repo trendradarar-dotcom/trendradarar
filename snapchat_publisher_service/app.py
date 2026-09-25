@@ -3,6 +3,7 @@ import os
 import uuid
 
 from flask import Flask, g, jsonify, request
+from werkzeug.exceptions import RequestEntityTooLarge
 
 from audit import audit, safe_correlation_id
 from publisher import (
@@ -228,6 +229,20 @@ def validate_spotlight():
             "external_publication_side_effect": "NONE",
         }), (200 if ok else 400)
 
+    except RequestEntityTooLarge:
+        audit(
+            "spotlight_request_too_large",
+            correlation_id=g.correlation_id,
+            status="BLOCKED",
+            http_status=413,
+            external_publication_side_effect="NONE",
+        )
+        return jsonify({
+            "ok": False,
+            "error": "request_too_large",
+            "correlation_id": g.correlation_id,
+            "external_publication_side_effect": "NONE",
+        }), 413
     except (EnvelopeValidationError, ValueError) as exc:
         audit(
             "spotlight_validation_exception",
@@ -355,6 +370,20 @@ def publish_spotlight():
         result["correlation_id"] = g.correlation_id
         return jsonify(result), 201
 
+    except RequestEntityTooLarge:
+        audit(
+            "spotlight_request_too_large",
+            correlation_id=g.correlation_id,
+            status="BLOCKED",
+            http_status=413,
+            external_publication_side_effect="NONE",
+        )
+        return jsonify({
+            "ok": False,
+            "error": "request_too_large",
+            "correlation_id": g.correlation_id,
+            "external_publication_side_effect": "NONE",
+        }), 413
     except EnvelopeValidationError as exc:
         return jsonify({
             "ok": False,
