@@ -182,3 +182,13 @@ INSTAGRAM_PROFESSIONAL_DASHBOARD = VISIBLE
 PUBLIC_CONTACT_INFO = NOT_EXPOSED
 NEXT_META_ACTION = Add @trendradarar as Instagram Tester in Meta app and accept tester invitation from Instagram account
 PUBLIC_INSTAGRAM_PUBLISHING = HOLD
+
+
+## Instagram tester acceptance — 2026-09-25
+
+INSTAGRAM_ACCOUNT_HANDLE = @trendradarar
+INSTAGRAM_TESTER_STATUS = ACCEPTED
+PROVIDER_EVIDENCE = Instagram Apps and Websites > Tester Invites shows Trend Radar-IG as authorized by the account on 24 September 2026, with an active Remove control.
+PRIOR_PENDING_ACCEPTANCE_GATE = CLOSED
+NEXT_GATE = Complete Meta app secret / Render OAuth configuration, then perform real Instagram OAuth and exact account identity verification.
+PUBLIC_INSTAGRAM_PUBLISHING = HOLD
