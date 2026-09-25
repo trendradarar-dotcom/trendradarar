@@ -155,6 +155,25 @@ class PublisherTests(unittest.TestCase):
             self.assertFalse(state["publication_enabled"])
             self.assertTrue(state["kill_switch"])
             self.assertTrue(state["emergency_read_only"])
+            self.assertFalse(state["target_account_verified"])
+            self.assertFalse(state["durable_reconciliation_ready"])
+            self.assertFalse(state["alerting_ready"])
+            self.assertFalse(state["production_assurance_ready"])
+
+    def test_publication_remains_blocked_until_all_assurance_gates_are_ready(self):
+        env = SpotlightEnvelope.from_dict(base_payload())
+        publisher = AyrshareSpotlightPublisher(api_key="test-key")
+        with patch.dict(os.environ, {
+            "SNAPCHAT_PUBLICATION_ENABLED": "true",
+            "SNAPCHAT_KILL_SWITCH": "false",
+            "SNAPCHAT_EMERGENCY_READ_ONLY": "false",
+        }, clear=True):
+            with self.assertRaises(PublicationGateClosed) as ctx:
+                publisher.publish(env)
+            self.assertIn("target_account_not_verified", str(ctx.exception))
+            self.assertIn("durable_reconciliation_not_ready", str(ctx.exception))
+            self.assertIn("alerting_not_ready", str(ctx.exception))
+            self.assertIn("production_assurance_not_ready", str(ctx.exception))
 
     def test_publication_gate_blocks_even_with_api_key(self):
         env = SpotlightEnvelope.from_dict(base_payload())
