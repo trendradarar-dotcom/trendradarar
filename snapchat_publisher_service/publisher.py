@@ -275,12 +275,17 @@ class DisabledSpotlightPublisher:
         return False
 
     def readiness(self) -> Dict[str, Any]:
+        state = control_state()
         return {
             "provider": self.provider_name,
             "provider_configured": False,
-            "publication_enabled": control_state()["publication_enabled"],
-            "kill_switch": control_state()["kill_switch"],
-            "emergency_read_only": control_state()["emergency_read_only"],
+            "publication_enabled": state["publication_enabled"],
+            "kill_switch": state["kill_switch"],
+            "emergency_read_only": state["emergency_read_only"],
+            "target_account_verified": state["target_account_verified"],
+            "durable_reconciliation_ready": state["durable_reconciliation_ready"],
+            "alerting_ready": state["alerting_ready"],
+            "production_assurance_ready": state["production_assurance_ready"],
             "normal_runtime_human_actions_target": 0,
             "markets": sorted(ALL_MARKETS),
             "reason": "no_approved_zero_routine_human_no_new_paid_provider_path_selected",
@@ -329,6 +334,10 @@ class AyrshareSpotlightPublisher:
             "publication_enabled": state["publication_enabled"],
             "kill_switch": state["kill_switch"],
             "emergency_read_only": state["emergency_read_only"],
+            "target_account_verified": state["target_account_verified"],
+            "durable_reconciliation_ready": state["durable_reconciliation_ready"],
+            "alerting_ready": state["alerting_ready"],
+            "production_assurance_ready": state["production_assurance_ready"],
             "provider_validation_required": True,
             "professional_profile_required": True,
             "normal_runtime_human_actions_target": 0,
