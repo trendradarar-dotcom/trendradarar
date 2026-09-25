@@ -1,0 +1,49 @@
+name: Snapchat Publisher CI
+
+on:
+  push:
+    branches:
+      - snapchat-production-review-20260925
+    paths:
+      - "snapchat_publisher_service/**"
+      - ".github/workflows/snapchat-publisher-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact branch commit
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r snapchat_publisher_service/requirements.txt
+          python -m pip check
+
+      - name: Compile
+        run: python -m compileall -q snapchat_publisher_service
+
+      - name: Run exact Snapchat publisher tests
+        working-directory: snapchat_publisher_service
+        run: python -m unittest discover -v -p "test_*.py"
+
+      - name: Verify no obvious committed secret patterns in Snapchat service
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -R -nE '(BEGIN (RSA|OPENSSH|EC) PRIVATE KEY|client_secret[[:space:]]*=[[:space:]]*["'''][^"'''$]|api[_-]?key[[:space:]]*=[[:space:]]*["'''][A-Za-z0-9_-]{16,})' snapchat_publisher_service snapchat_oauth_service; then
+            echo "Potential committed secret material detected."
+            exit 1
+          fi
+          echo "No obvious committed secret patterns detected."
