@@ -221,3 +221,16 @@ UNRELATED_COMMERCIAL_REGISTRY = REJECTED
 PUBLIC_SIDE_EFFECT_AUTHORITY = ZERO
 
 The subsystem must stay useful while blocked: it may validate, package, audit and prepare Snapchat-ready output, but must not silently degrade to manual routine posting or an unapproved paid/legal workaround.
+
+## Additional route finding — browser automation is not an acceptable workaround
+
+Status: CLOSED / REJECTED ROUTE
+
+Snapchat's current Terms of Service prohibit using robots, scripts, software, or other automated or semi-automated means to access the Services except where expressly permitted.
+
+Therefore:
+- automating profile.snapchat.com with a browser bot is NOT adopted as the production publication path;
+- the fact that the web uploader exists does not make scripted UI posting an approved automation API;
+- the project must wait for a supported first-party/API route compatible with the frozen constraints rather than silently bypass the access model.
+
+This finding strengthens the current HOLD_EXTERNAL_ACCESS_MODEL decision.
