@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; connect-src https://trendradar-connect.onrender.com; script-src 'unsafe-inline'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'">
+  <title>تحقق Instagram · رادار الترند</title>
+  <style>
+    :root{color-scheme:dark}
+    body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;background:#0b1020;color:#fff;min-height:100vh;margin:0;display:grid;place-items:center}
+    main{width:min(680px,calc(100% - 32px))}
+    .box{border:1px solid #2d395c;border-radius:18px;padding:28px;background:#10182b}
+    .ok{border-color:#35a56d}.bad{border-color:#b45d5d}
+    h1{margin-top:0}
+    p{line-height:1.8;color:#d7deee}
+    code{direction:ltr;unicode-bidi:bidi-override}
+  </style>
+</head>
+<body>
+<main>
+  <div class="box" id="box">
+    <h1 id="title">جارٍ التحقق من ربط Instagram…</h1>
+    <div id="details"></div>
+  </div>
+</main>
+<script>
+(async () => {
+  const params = new URLSearchParams(location.search);
+  const payload = {
+    code: params.get('code') || '',
+    state: params.get('state') || '',
+    error: params.get('error') || '',
+    error_description: params.get('error_description') || ''
+  };
+
+  history.replaceState({}, document.title, location.pathname);
+
+  const box = document.getElementById('box');
+  const title = document.getElementById('title');
+  const details = document.getElementById('details');
+
+  try {
+    const response = await fetch('https://trendradar-connect.onrender.com/oauth/callback', {
+      method: 'POST',
+      mode: 'cors',
+      credentials: 'omit',
+      cache: 'no-store',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(payload)
+    });
+    const data = await response.json();
+    if (!response.ok || !data.ok) {
+      throw new Error(data.error || data.stage || 'OAUTH_CALLBACK_FAILED');
+    }
+    box.classList.add('ok');
+    title.textContent = 'تم الربط والتحقق بنجاح';
+    const username = String(data.username || 'trendradarar').replace(/^@/, '');
+    const type = String(data.account_type || 'Professional');
+    const userId = String(data.professional_user_id || '');
+    const publish = data.public_publish_authorized === true ? 'مفعّل' : 'معطّل';
+    details.innerHTML =
+      '<p>الحساب: <strong>@' + username.replace(/[<>&"]/g, '') + '</strong></p>' +
+      '<p>النوع: <strong>' + type.replace(/[<>&"]/g, '') + '</strong></p>' +
+      (userId ? '<p>معرّف الحساب الاحترافي: <code>' + userId.replace(/[^0-9A-Za-z_-]/g, '') + '</code></p>' : '') +
+      '<p>النشر العام: <strong>' + publish + '</strong></p>';
+  } catch (error) {
+    box.classList.add('bad');
+    title.textContent = 'لم يكتمل ربط Instagram';
+    details.innerHTML = '<p>لم يتم نشر أي محتوى. أعد المحاولة من صفحة الربط.</p>';
+  }
+})();
+</script>
+</body>
+</html>
