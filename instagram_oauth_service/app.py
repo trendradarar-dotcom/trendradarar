@@ -32,7 +32,7 @@ OAUTH_PUBLIC_ORIGIN = os.getenv(
 OAUTH_GATEWAY_SECRET = os.getenv("INSTAGRAM_OAUTH_GATEWAY_SECRET", "").strip()
 DATABASE_URL = os.getenv("INSTAGRAM_DATABASE_URL", os.getenv("DATABASE_URL", "")).strip()
 TOKEN_ENCRYPTION_KEY = os.getenv("INSTAGRAM_TOKEN_ENCRYPTION_KEY", "").strip()
-REFRESH_SECRET = os.getenv("INSTAGRAM_REFRESH_SECRET", "").strip()
+REFRESH_SECRET = os.getenv("INSTAGRAM_REFRESH_SECRET", "").strip() or OAUTH_GATEWAY_SECRET
 PERSISTENCE_REQUIRED = os.getenv("INSTAGRAM_PERSISTENCE_REQUIRED", "false").lower() == "true"
 SCOPES = (
     "instagram_business_basic",
@@ -65,15 +65,27 @@ def _sid():
     return sid
 
 
+def _effective_token_encryption_key():
+    if TOKEN_ENCRYPTION_KEY:
+        return TOKEN_ENCRYPTION_KEY
+    if not SESSION_SECRET:
+        return ""
+    digest = hashlib.sha256(
+        ("trendradar-instagram-token-v1:" + SESSION_SECRET).encode("utf-8")
+    ).digest()
+    return base64.urlsafe_b64encode(digest).decode("utf-8")
+
+
 def _persistence_configured():
-    return bool(DATABASE_URL and TOKEN_ENCRYPTION_KEY)
+    return bool(DATABASE_URL and _effective_token_encryption_key())
 
 
 def _fernet():
-    if not TOKEN_ENCRYPTION_KEY:
+    key = _effective_token_encryption_key()
+    if not key:
         return None
     try:
-        return Fernet(TOKEN_ENCRYPTION_KEY.encode("utf-8"))
+        return Fernet(key.encode("utf-8"))
     except Exception:
         return None
 
