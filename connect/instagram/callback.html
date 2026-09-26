@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<meta name="referrer" content="no-referrer">
+<title>تحقق Instagram · رادار الترند</title>
+<style>
+:root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;background:#040b25;color:#eef5ff;font-family:system-ui,-apple-system,Segoe UI,Tahoma,sans-serif;display:grid;place-items:center;min-height:100vh}.card{width:min(620px,92vw);border:1px solid #2458a8;background:#081637;border-radius:22px;padding:28px;line-height:1.8}.ok{border-color:#3c8}.bad{border-color:#c66}.muted{opacity:.72}</style>
+</head>
+<body>
+<main id="card" class="card">
+<h1 id="title">جارٍ التحقق من الربط…</h1>
+<div id="details" class="muted">لم يتم نشر أي محتوى.</div>
+</main>
+<script>
+(async()=>{
+ const gateway="https://trendradar-connect.onrender.com";
+ const p=new URLSearchParams(location.search);
+ const payload={code:p.get("code")||"",state:p.get("state")||"",error:p.get("error")||"",error_description:p.get("error_description")||""};
+ history.replaceState(null,"",location.pathname);
+ const card=document.getElementById("card"),title=document.getElementById("title"),details=document.getElementById("details");
+ try{
+   const r=await fetch(gateway+"/oauth/callback",{method:"POST",headers:{"Content-Type":"application/json","Accept":"application/json"},credentials:"omit",cache:"no-store",body:JSON.stringify(payload)});
+   const data=await r.json();
+   if(!r.ok||!data.ok) throw new Error(data.error||data.stage||"OAUTH_CALLBACK_FAILED");
+   card.classList.add("ok");
+   title.textContent="تم الربط والتحقق بنجاح";
+   const user=(data.username||"trendradarar").replace(/^@/,"");
+   const type=data.account_type||"Professional";
+   details.innerHTML="<p>الحساب: @"+user.replace(/[<>&]/g,"")+"</p><p>النوع: "+String(type).replace(/[<>&]/g,"")+"</p><p>النشر العام ما زال معطّلًا.</p>";
+ }catch(e){
+   card.classList.add("bad");
+   title.textContent="لم يكتمل ربط Instagram";
+   details.textContent="لم يتم نشر أي محتوى. الرمز: "+(e&&e.message?e.message:"UNKNOWN");
+ }
+})();
+</script>
+</body>
+</html>
