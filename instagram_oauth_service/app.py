@@ -11,6 +11,8 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 import requests
+import psycopg
+from cryptography.fernet import Fernet, InvalidToken
 from flask import Flask, Response, jsonify, redirect, request, send_file, session, url_for
 
 APP_NAME = "Trend Radar — Instagram Reels"
@@ -28,6 +30,10 @@ OAUTH_PUBLIC_ORIGIN = os.getenv(
     "INSTAGRAM_OAUTH_PUBLIC_ORIGIN", "https://trendradar.com.co"
 ).strip().rstrip("/")
 OAUTH_GATEWAY_SECRET = os.getenv("INSTAGRAM_OAUTH_GATEWAY_SECRET", "").strip()
+DATABASE_URL = os.getenv("INSTAGRAM_DATABASE_URL", os.getenv("DATABASE_URL", "")).strip()
+TOKEN_ENCRYPTION_KEY = os.getenv("INSTAGRAM_TOKEN_ENCRYPTION_KEY", "").strip()
+REFRESH_SECRET = os.getenv("INSTAGRAM_REFRESH_SECRET", "").strip()
+PERSISTENCE_REQUIRED = os.getenv("INSTAGRAM_PERSISTENCE_REQUIRED", "false").lower() == "true"
 SCOPES = (
     "instagram_business_basic",
     "instagram_business_content_publish",
@@ -59,8 +65,108 @@ def _sid():
     return sid
 
 
+def _persistence_configured():
+    return bool(DATABASE_URL and TOKEN_ENCRYPTION_KEY)
+
+
+def _fernet():
+    if not TOKEN_ENCRYPTION_KEY:
+        return None
+    try:
+        return Fernet(TOKEN_ENCRYPTION_KEY.encode("utf-8"))
+    except Exception:
+        return None
+
+
+def _db_connect():
+    if not DATABASE_URL:
+        return None
+    return psycopg.connect(DATABASE_URL, connect_timeout=10)
+
+
+def _ensure_token_table():
+    if not _persistence_configured():
+        return False
+    with _db_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS instagram_oauth_tokens (
+                    account_key TEXT PRIMARY KEY,
+                    ciphertext BYTEA NOT NULL,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+                """
+            )
+        conn.commit()
+    return True
+
+
+def _persist_token_record(rec):
+    if not _persistence_configured():
+        return not PERSISTENCE_REQUIRED
+    f = _fernet()
+    if not f:
+        return False
+    safe_rec = dict(rec)
+    payload = json.dumps(safe_rec, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    ciphertext = f.encrypt(payload)
+    account_key = str(safe_rec.get("username") or EXPECTED_USERNAME or "").strip().lower()
+    if not account_key:
+        return False
+    try:
+        _ensure_token_table()
+        with _db_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO instagram_oauth_tokens(account_key, ciphertext, updated_at)
+                    VALUES (%s, %s, NOW())
+                    ON CONFLICT (account_key)
+                    DO UPDATE SET ciphertext = EXCLUDED.ciphertext, updated_at = NOW()
+                    """,
+                    (account_key, ciphertext),
+                )
+            conn.commit()
+        return True
+    except Exception:
+        return False
+
+
+def _load_persisted_token_record():
+    if not _persistence_configured():
+        return None
+    f = _fernet()
+    if not f:
+        return None
+    account_key = (EXPECTED_USERNAME or "").strip().lower()
+    if not account_key:
+        return None
+    try:
+        _ensure_token_table()
+        with _db_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT ciphertext FROM instagram_oauth_tokens WHERE account_key = %s",
+                    (account_key,),
+                )
+                row = cur.fetchone()
+        if not row:
+            return None
+        raw = bytes(row[0]) if not isinstance(row[0], bytes) else row[0]
+        return json.loads(f.decrypt(raw).decode("utf-8"))
+    except (InvalidToken, Exception):
+        return None
+
+
 def _token_record():
-    return TOKEN_STORE.get(_sid())
+    rec = TOKEN_STORE.get(_sid())
+    if rec:
+        return rec
+    rec = _load_persisted_token_record()
+    if rec:
+        TOKEN_STORE[_sid()] = rec
+    return rec
 
 
 def _base_url():
@@ -96,6 +202,62 @@ def _graph(method, path, token, *, params=None, data=None, timeout=45):
     except Exception:
         payload = {"raw": response.text[:2000]}
     return response.status_code, payload
+
+
+def _refresh_long_lived_token(rec):
+    token = str((rec or {}).get("access_token") or "").strip()
+    if not token:
+        return 400, {"ok": False, "error": "MISSING_PERSISTED_TOKEN"}
+    response = requests.get(
+        "https://graph.instagram.com/refresh_access_token",
+        params={
+            "grant_type": "ig_refresh_token",
+            "access_token": token,
+        },
+        timeout=45,
+    )
+    try:
+        payload = response.json()
+    except Exception:
+        payload = {}
+    if response.status_code >= 400 or not payload.get("access_token"):
+        return 502, {
+            "ok": False,
+            "stage": "LONG_TOKEN_REFRESH",
+            "http": response.status_code,
+            "provider_error": payload.get("error") if isinstance(payload, dict) else None,
+        }
+
+    refreshed = dict(rec)
+    refreshed["access_token"] = payload["access_token"]
+    refreshed["expires_in"] = payload.get("expires_in")
+    refreshed["refreshed_at"] = int(time.time())
+
+    profile_http, profile = _graph(
+        "GET",
+        "me",
+        refreshed["access_token"],
+        params={"fields": "id,user_id,username,account_type"},
+    )
+    if profile_http >= 400:
+        return 502, {"ok": False, "stage": "REFRESH_PROFILE_VERIFY", "http": profile_http}
+
+    actual_username = str(profile.get("username") or "").strip().lstrip("@").lower()
+    account_type = str(profile.get("account_type") or "").strip()
+    normalized_account_type = account_type.replace(" ", "_").upper()
+    professional_user_id = profile.get("user_id")
+    if EXPECTED_USERNAME and actual_username != EXPECTED_USERNAME:
+        return 403, {"ok": False, "error": "INSTAGRAM_ACCOUNT_MISMATCH"}
+    if not professional_user_id or normalized_account_type not in {"BUSINESS", "MEDIA_CREATOR"}:
+        return 422, {"ok": False, "error": "INSTAGRAM_PROFESSIONAL_ACCOUNT_REQUIRED"}
+
+    refreshed["username"] = profile.get("username")
+    refreshed["account_type"] = account_type
+    refreshed["user_id"] = professional_user_id
+    refreshed["app_scoped_user_id"] = profile.get("id") or refreshed.get("app_scoped_user_id")
+    if not _persist_token_record(refreshed):
+        return 503, {"ok": False, "error": "TOKEN_PERSISTENCE_FAILED"}
+    return 200, refreshed
 
 
 def _b64url_decode(value):
@@ -331,6 +493,30 @@ def security_headers(response):
     return response
 
 
+@app.post("/internal/refresh-instagram-token")
+def refresh_instagram_token():
+    supplied = request.headers.get("X-TrendRadar-Refresh", "")
+    if not REFRESH_SECRET or not supplied or not hmac.compare_digest(supplied, REFRESH_SECRET):
+        return jsonify({"ok": False, "error": "UNAUTHORIZED"}), 403
+    if not _persistence_configured():
+        return jsonify({"ok": False, "error": "PERSISTENCE_NOT_CONFIGURED"}), 503
+    rec = _load_persisted_token_record()
+    if not rec:
+        return jsonify({"ok": False, "error": "NO_PERSISTED_TOKEN"}), 404
+    status, refreshed = _refresh_long_lived_token(rec)
+    if status != 200:
+        return jsonify(refreshed), status
+    return jsonify({
+        "ok": True,
+        "status": "REFRESHED_VERIFIED",
+        "username": refreshed.get("username"),
+        "account_type": refreshed.get("account_type"),
+        "professional_user_id": refreshed.get("user_id"),
+        "expires_in": refreshed.get("expires_in"),
+        "public_publish_authorized": PUBLIC_PUBLISH_AUTHORIZED,
+    })
+
+
 @app.get("/health")
 def health():
     return jsonify(
@@ -339,6 +525,8 @@ def health():
             "service": "trendradar-instagram-oauth",
             "api_version": API_VERSION,
             "configured": _configured(),
+            "persistence_configured": _persistence_configured(),
+            "persistence_required": PERSISTENCE_REQUIRED,
             "public_publish_authorized": PUBLIC_PUBLISH_AUTHORIZED,
         }
     )
@@ -421,6 +609,8 @@ def public_oauth_callback():
     if status != 200:
         return jsonify(result), status
 
+    if not _persist_token_record(result):
+        return jsonify({"ok": False, "error": "TOKEN_PERSISTENCE_FAILED"}), 503
     connection_id = secrets.token_urlsafe(24)
     TOKEN_STORE[f"public:{connection_id}"] = result
     return jsonify(
@@ -488,6 +678,8 @@ def instagram_callback():
     if status != 200:
         return jsonify(rec), status
 
+    if not _persist_token_record(rec):
+        return jsonify({"ok": False, "error": "TOKEN_PERSISTENCE_FAILED"}), 503
     TOKEN_STORE[_sid()] = rec
     return redirect(url_for("share"))
 
