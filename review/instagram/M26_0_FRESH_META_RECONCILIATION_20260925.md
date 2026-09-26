@@ -167,3 +167,30 @@ Remaining completion evidence:
 - Verify exact provider identity @trendradarar, BUSINESS/MEDIA_CREATOR, professional user ID.
 - Reconcile requested and granted scopes.
 - Keep PUBLIC_INSTAGRAM_PUBLISH_AUTHORIZED=false.
+
+
+## Verification build live — 2026-09-26
+
+CODE_COMMIT = ebbd052a2dedfa545b3839443438d26a4ebbb772
+RENDER_DEPLOY = dep-dargl8t9fdbs739h5ujg
+DEPLOY_STATUS = LIVE
+HEALTH_OK = true
+HEALTH_CONFIGURED = true
+PUBLIC_INSTAGRAM_PUBLISH_AUTHORIZED = false
+
+SAFE_CALLBACK_EVIDENCE_ADDED:
+- username
+- account_type
+- professional_user_id
+- permissions returned by short-token response when provider supplies them
+- no access token or secret is displayed
+
+CURRENT_EXACT_GATE:
+INSTAGRAM_APP_SECRET must be replaced with the Instagram-specific secret displayed next to Instagram App ID 1358113199729841 on the provider page.
+The prior secret was sourced before the App-ID collision was reconciled and is not accepted as Instagram-specific evidence.
+
+AFTER_SECRET_REPLACEMENT:
+1. Redeploy.
+2. OAuth owner consent for @trendradarar.
+3. Callback identity and permission verification.
+4. Close M26.0 only if all provider evidence passes.
