@@ -241,3 +241,49 @@ DOWNSTREAM_GATES_NOT_CLOSED_BY_M26.0:
 - Replace browser-facing onrender.com test gateway with a trusted Trend Radar domain before production.
 - Durable encrypted token persistence/refresh for zero-human operation; current review token store is in-memory.
 - Public media_publish remains forbidden until a separate governed authorization is explicitly granted.
+
+
+## M26.1 trusted-domain + durable-token preparation — 2026-09-26
+
+ORDER = TRUSTED_DOMAIN -> DURABLE_ENCRYPTED_TOKEN -> SCHEDULED_REFRESH -> APP_REVIEW_ADVANCED_ACCESS -> PUBLIC_PUBLISH_GATE
+
+RUNTIME_BUILD:
+- commit = 33bdd8a48779239e9d2865469ce92732d0938684
+- build_revision = M26.1-PERSISTENCE-20260926
+- deploy = LIVE
+- configured = true
+- persistence_configured = false
+- persistence_required = false
+- public_publish_authorized = false
+
+DURABLE_TOKEN_IMPLEMENTATION:
+- encrypted-at-rest token persistence code = IMPLEMENTED
+- database table auto-initialization = IMPLEMENTED
+- exact-account binding after reload/refresh = IMPLEMENTED
+- long-lived Instagram token refresh endpoint = IMPLEMENTED
+- refresh re-verifies username, professional user_id, and account type = IMPLEMENTED
+- refresh endpoint returns no token = IMPLEMENTED
+- encryption key derives server-side from existing stable SESSION_SECRET unless an explicit key is supplied
+- no encryption key/token/secret stored in GitHub evidence
+
+ISOLATION:
+- Existing Render Postgres resources belong to TCC/TTCL and MUST NOT be reused.
+- Free Key Value was rejected because Render free Key Value has no persistence.
+- A new free Trend Radar Postgres could not be provisioned because the workspace already has the single allowed active free database.
+- No cross-project database was touched.
+
+PRODUCTION_PERSISTENCE_GATE:
+- A Trend Radar-only persistent datastore is still required.
+- Do not set INSTAGRAM_PERSISTENCE_REQUIRED=true until that datastore is connected and verified.
+- Re-run owner OAuth after persistence is connected because prior in-memory token state is not durable across deploys.
+
+TRUSTED_DOMAIN_DISCOVERY:
+- authoritative DNS provider = Cloudflare
+- nameservers = ganz.ns.cloudflare.com / surina.ns.cloudflare.com
+- auth.trendradar.com.co currently = NXDOMAIN / not created
+- intended target = trendradar-connect.onrender.com
+- intended production callback = https://auth.trendradar.com.co/oauth/browser/callback
+- Cloudflare record should initially be DNS-only until Render certificate verification succeeds.
+- Existing public site / www records must remain unchanged.
+
+PUBLIC_PUBLISHING = HOLD
