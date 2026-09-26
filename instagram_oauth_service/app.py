@@ -35,6 +35,7 @@ DATABASE_URL = os.getenv("INSTAGRAM_DATABASE_URL", os.getenv("DATABASE_URL", "")
 TOKEN_ENCRYPTION_KEY = os.getenv("INSTAGRAM_TOKEN_ENCRYPTION_KEY", "").strip()
 REFRESH_SECRET = os.getenv("INSTAGRAM_REFRESH_SECRET", "").strip() or OAUTH_GATEWAY_SECRET
 PERSISTENCE_REQUIRED = os.getenv("INSTAGRAM_PERSISTENCE_REQUIRED", "false").lower() == "true"
+REFRESH_SELF_TEST = os.getenv("INSTAGRAM_REFRESH_SELF_TEST", "false").lower() == "true"
 SCOPES = (
     "instagram_business_basic",
     "instagram_business_content_publish",
@@ -999,6 +1000,53 @@ def terms():
 </body></html>""",
         mimetype="text/html",
     )
+
+
+def _run_refresh_self_test():
+    evidence = {
+        "event": "INSTAGRAM_REFRESH_SELF_TEST",
+        "public_publish_authorized": PUBLIC_PUBLISH_AUTHORIZED,
+    }
+    try:
+        rec = _load_persisted_token_record()
+        if not rec:
+            evidence.update({"ok": False, "status": "NO_PERSISTED_TOKEN"})
+        else:
+            connected_at = int(rec.get("connected_at") or 0)
+            age_seconds = max(0, int(time.time()) - connected_at) if connected_at else None
+            evidence["token_age_seconds"] = age_seconds
+            if age_seconds is not None and age_seconds < 86400:
+                evidence.update({"ok": False, "status": "TOKEN_TOO_NEW_FOR_REFRESH"})
+            else:
+                status, refreshed = _refresh_long_lived_token(rec)
+                if status == 200:
+                    evidence.update({
+                        "ok": True,
+                        "status": "REFRESHED_VERIFIED",
+                        "username": refreshed.get("username"),
+                        "account_type": refreshed.get("account_type"),
+                        "professional_user_id": refreshed.get("user_id"),
+                        "expires_in": refreshed.get("expires_in"),
+                    })
+                else:
+                    evidence.update({
+                        "ok": False,
+                        "status": "REFRESH_FAILED",
+                        "http": status,
+                        "stage": refreshed.get("stage") if isinstance(refreshed, dict) else None,
+                        "error": refreshed.get("error") if isinstance(refreshed, dict) else None,
+                    })
+    except Exception as exc:
+        evidence.update({
+            "ok": False,
+            "status": "SELF_TEST_EXCEPTION",
+            "exception_type": type(exc).__name__,
+        })
+    print(json.dumps(evidence, sort_keys=True), flush=True)
+
+
+if REFRESH_SELF_TEST:
+    _run_refresh_self_test()
 
 
 if __name__ == "__main__":
