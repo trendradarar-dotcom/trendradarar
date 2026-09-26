@@ -482,13 +482,39 @@ def _parse_signed_request(signed_request):
         return None
 
 
+def _delete_persisted_token_record(user_id):
+    if not _persistence_configured():
+        return True, 0
+    rec = _load_persisted_token_record()
+    if not rec:
+        return True, 0
+    if str(rec.get("user_id")) != str(user_id):
+        return True, 0
+    account_key = str(rec.get("username") or EXPECTED_USERNAME or "").strip().lower()
+    if not account_key:
+        return False, 0
+    try:
+        with _db_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM instagram_oauth_tokens WHERE account_key = %s",
+                    (account_key,),
+                )
+                deleted = cur.rowcount
+            conn.commit()
+        return True, deleted
+    except Exception:
+        return False, 0
+
+
 def _delete_user(user_id):
     deleted = 0
     for sid, rec in list(TOKEN_STORE.items()):
         if str(rec.get("user_id")) == str(user_id):
             TOKEN_STORE.pop(sid, None)
             deleted += 1
-    return deleted
+    persistence_ok, persisted_deleted = _delete_persisted_token_record(user_id)
+    return persistence_ok, deleted + persisted_deleted
 
 
 @app.after_request
@@ -901,7 +927,9 @@ def deauthorize():
     signed = request.values.get("signed_request", "")
     payload = _parse_signed_request(signed)
     if payload and payload.get("user_id"):
-        _delete_user(payload["user_id"])
+        persistence_ok, _ = _delete_user(payload["user_id"])
+        if not persistence_ok:
+            return jsonify({"ok": False, "error": "TOKEN_DELETION_FAILED"}), 503
     else:
         TOKEN_STORE.pop(_sid(), None)
     session.clear()
@@ -914,7 +942,7 @@ def data_deletion():
         return Response(
             """<!doctype html><html><head><meta charset="utf-8"><title>Trend Radar Data Deletion</title></head>
 <body><h1>Instagram data deletion</h1>
-<p>Disconnecting Instagram removes the active server-side authorization record for the connected account.</p>
+<p>A verified Meta deauthorization or data-deletion request removes the matching active server-side authorization record, including the encrypted persisted token when configured.</p>
 <p>Meta may also send a signed data-deletion request to this endpoint. Trend Radar verifies that request and deletes matching authorization data.</p>
 <p>Contact: trendradarar@gmail.com</p></body></html>""",
             mimetype="text/html",
@@ -924,7 +952,9 @@ def data_deletion():
     if not payload or not payload.get("user_id"):
         return jsonify({"ok": False, "error": "INVALID_SIGNED_REQUEST"}), 400
     user_id = str(payload["user_id"])
-    _delete_user(user_id)
+    persistence_ok, _ = _delete_user(user_id)
+    if not persistence_ok:
+        return jsonify({"ok": False, "error": "TOKEN_DELETION_FAILED"}), 503
     confirmation = secrets.token_urlsafe(18)
     DELETION_STORE[confirmation] = {"user_id": user_id, "status": "deleted"}
     return jsonify(
