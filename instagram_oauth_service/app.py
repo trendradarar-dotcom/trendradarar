@@ -16,6 +16,7 @@ from cryptography.fernet import Fernet, InvalidToken
 from flask import Flask, Response, jsonify, redirect, request, send_file, session, url_for
 
 APP_NAME = "Trend Radar — Instagram Reels"
+BUILD_REVISION = "M26.1-PERSISTENCE-20260926"
 API_VERSION = os.getenv("INSTAGRAM_API_VERSION", "v26.0").strip() or "v26.0"
 APP_ID = os.getenv("INSTAGRAM_APP_ID", "").strip()
 APP_SECRET = os.getenv("INSTAGRAM_APP_SECRET", "").strip()
@@ -535,6 +536,7 @@ def health():
         {
             "ok": True,
             "service": "trendradar-instagram-oauth",
+            "build_revision": BUILD_REVISION,
             "api_version": API_VERSION,
             "configured": _configured(),
             "persistence_configured": _persistence_configured(),
