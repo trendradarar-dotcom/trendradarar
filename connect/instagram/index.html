@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<meta name="referrer" content="no-referrer">
+<title>ربط Instagram · رادار الترند</title>
+<style>
+:root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;background:#040b25;color:#eef5ff;font-family:system-ui,-apple-system,Segoe UI,Tahoma,sans-serif;display:grid;place-items:center;min-height:100vh}.card{width:min(620px,92vw);border:1px solid #2458a8;background:#081637;border-radius:22px;padding:28px;line-height:1.8}.btn{width:100%;border:0;border-radius:12px;padding:14px 18px;font:inherit;font-weight:700;cursor:pointer;background:#fff;color:#111}.muted{opacity:.72}.err{color:#ffb8b8;white-space:pre-wrap}</style>
+</head>
+<body>
+<main class="card">
+<h1>ربط Instagram مع رادار الترند</h1>
+<p>سيتم تحويلك إلى Instagram لمنح الصلاحيات المطلوبة للحساب الاحترافي المملوك لرادار الترند.</p>
+<p class="muted">النشر العام يبقى معطّلًا حتى اعتماد بوابة النشر بشكل مستقل.</p>
+<button id="go" class="btn" type="button">متابعة إلى Instagram</button>
+<p id="status" class="muted" aria-live="polite"></p>
+</main>
+<script>
+const gateway="https://trendradar-connect.onrender.com";
+const btn=document.getElementById("go");
+const statusEl=document.getElementById("status");
+btn.addEventListener("click",async()=>{
+  btn.disabled=true; statusEl.textContent="جارٍ تجهيز الربط الآمن…";
+  try{
+    const r=await fetch(gateway+"/oauth/start",{method:"GET",headers:{"Accept":"application/json"},credentials:"omit",cache:"no-store"});
+    const data=await r.json();
+    if(!r.ok||!data.authorization_url||!data.authorization_url.startsWith("https://www.instagram.com/oauth/authorize?")) throw new Error(data.error||"OAUTH_START_FAILED");
+    location.assign(data.authorization_url);
+  }catch(e){
+    statusEl.className="err";
+    statusEl.textContent="تعذر بدء الربط بأمان. لم يتم نشر أي محتوى. الرمز: "+(e&&e.message?e.message:"UNKNOWN");
+    btn.disabled=false;
+  }
+});
+</script>
+</body>
+</html>
