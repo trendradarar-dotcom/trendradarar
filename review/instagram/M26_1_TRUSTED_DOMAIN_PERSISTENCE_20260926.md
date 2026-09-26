@@ -67,3 +67,58 @@ Existing M26.1 service code supports:
 
 PUBLIC_PUBLISH_AUTHORIZED = false
 M26.1 = IN PROGRESS
+
+
+## Runtime closure evidence — 2026-09-27
+
+- Dedicated internal Postgres URL bound to `INSTAGRAM_DATABASE_URL`.
+- `/health` after binding:
+  - configured=true
+  - persistence_configured=true
+  - persistence_required initially false
+  - public_publish_authorized=false
+- Fresh trusted-domain OAuth completed for @trendradarar through:
+  `https://auth.trendradar.com.co/oauth/browser/callback`
+- Backend callback returned HTTP 200 only after encrypted persistence succeeded.
+- Verified provider identity:
+  - username: trendradarar
+  - account_type: BUSINESS
+  - professional_user_id: 17841428134382903
+  - granted permissions: instagram_business_basic, instagram_business_content_publish
+- `INSTAGRAM_PERSISTENCE_REQUIRED=true` enabled and service restarted.
+- After restart, a fresh browser request to `/share` reconstructed the same account and permissions from durable storage.
+- Therefore encrypted durable token reload across process restart = PASS.
+- Public publishing remained false throughout.
+
+## Persistence deletion hardening
+
+Commit:
+`4bd4531ebc838173004792ac894b81afd60af409`
+
+Verified Meta-signed deauthorization/data-deletion requests now remove the matching encrypted persisted token from PostgreSQL as well as in-memory records, and fail closed with HTTP 503 if durable deletion cannot be completed.
+
+## Refresh verification timing gate
+
+Meta long-lived Instagram tokens cannot be refreshed until they are at least 24 hours old and still unexpired.
+The fresh long-lived token was issued during the successful callback at approximately:
+`2026-09-26T22:08:55Z`.
+
+Immediate provider refresh is therefore intentionally NOT attempted.
+
+A safe server-side refresh self-test gate was added in commit:
+`32d2a171bda31cfeb710149f9fea2013c724bc6d`
+
+It:
+- loads only the encrypted persisted token,
+- refuses locally when token age < 86400 seconds,
+- emits no access token or secret,
+- on eligible execution requires provider refresh + exact identity verification + encrypted re-persistence before reporting REFRESHED_VERIFIED.
+
+Current M26.1 status:
+- TRUSTED_DOMAIN = PASS
+- ENCRYPTED_PERSISTENCE = PASS
+- FAIL_CLOSED_PERSISTENCE_REQUIRED = PASS
+- RESTART_RELOAD = PASS
+- VERIFIED_DELETION_PERSISTENCE = PASS
+- REFRESH_FUNCTIONAL_VERIFICATION = PENDING PROVIDER 24H AGE WINDOW
+- PUBLIC_PUBLISH = HOLD / false
