@@ -16,6 +16,10 @@ TERMINAL_STATUSES = {
     "HOLD_BLAST_RADIUS",
     "HOLD_CONCURRENCY",
     "HOLD_CIRCUIT_OPEN",
+    "HOLD_KILL_SWITCH",
+    "HOLD_QUEUE_LIMIT",
+    "HOLD_MUTATION_RATE",
+    "HOLD_ATTEMPT_LIMIT",
 }
 
 
@@ -39,12 +43,16 @@ class PublisherRuntime:
         expected_username,
         publish_secret,
         public_publish_authorized,
+        publish_enabled,
         media_host_allowlist,
         allowed_markets,
         allowed_languages,
         max_daily_publications=10,
         max_inflight=1,
         circuit_failure_threshold=3,
+        max_unpublished_queue=5,
+        max_api_mutations_per_minute=10,
+        max_provider_mutations_per_job=2,
         media_asset_probe=None,
     ):
         self.db_connect = db_connect
@@ -53,6 +61,7 @@ class PublisherRuntime:
         self.expected_username = (expected_username or "").strip().lstrip("@").lower()
         self.publish_secret = publish_secret or ""
         self.public_publish_authorized = bool(public_publish_authorized)
+        self.publish_enabled = bool(publish_enabled)
         self.media_host_allowlist = {
             h.strip().lower().rstrip(".")
             for h in (media_host_allowlist or [])
@@ -63,6 +72,9 @@ class PublisherRuntime:
         self.max_daily_publications = int(max_daily_publications)
         self.max_inflight = int(max_inflight)
         self.circuit_failure_threshold = int(circuit_failure_threshold)
+        self.max_unpublished_queue = int(max_unpublished_queue)
+        self.max_api_mutations_per_minute = int(max_api_mutations_per_minute)
+        self.max_provider_mutations_per_job = int(max_provider_mutations_per_job)
         self.media_asset_probe = media_asset_probe
 
     def configured(self):
@@ -173,7 +185,7 @@ class PublisherRuntime:
         for gate in ("rights_status", "policy_status", "legal_status"):
             if str(payload.get(gate) or "").strip().upper() != "PASS":
                 raise IntentValidationError(f"{gate.upper()}_NOT_PASS")
-        if str(payload.get("commercial_status") or "").strip().upper() != "NOT_COMMERCIAL":
+        if str(payload.get("commercial_status") or "").strip().upper() != "EDITORIAL_ORIGINAL":
             raise IntentValidationError("COMMERCIAL_CONTENT_HOLD")
 
         asset_sha256 = self._safe_text(
@@ -202,7 +214,7 @@ class PublisherRuntime:
             "rights_status": "PASS",
             "policy_status": "PASS",
             "legal_status": "PASS",
-            "commercial_status": "NOT_COMMERCIAL",
+            "commercial_status": "EDITORIAL_ORIGINAL",
             "scheduled_time": scheduled_time,
             "idempotency_key": self._safe_text(
                 payload.get("idempotency_key"), name="IDEMPOTENCY_KEY", max_len=200
@@ -409,12 +421,41 @@ class PublisherRuntime:
                 cur.execute(
                     """
                     SELECT COUNT(*) FROM instagram_publication_jobs
-                    WHERE status IN ('FAILED_FINAL','UNKNOWN')
+                    WHERE status IN ('FAILED_FINAL','UNKNOWN','PUBLISHED_UNVERIFIED')
                       AND updated_at >= NOW() - INTERVAL '15 minutes'
                     """
                 )
                 failures_15m = int(cur.fetchone()[0])
-        return published_24h, inflight, failures_15m
+                cur.execute(
+                    """
+                    SELECT COUNT(*) FROM instagram_publication_jobs
+                    WHERE status NOT IN (
+                        'VERIFIED','FAILED_FINAL','UNKNOWN','PUBLISHED_UNVERIFIED',
+                        'HOLD_QUEUE_LIMIT'
+                    )
+                    """
+                )
+                unpublished_queue = int(cur.fetchone()[0])
+                cur.execute(
+                    """
+                    SELECT COUNT(*) FROM instagram_publication_events
+                    WHERE event_type = 'PROVIDER_MUTATION'
+                      AND created_at >= NOW() - INTERVAL '1 minute'
+                    """
+                )
+                mutations_1m = int(cur.fetchone()[0])
+        return published_24h, inflight, failures_15m, unpublished_queue, mutations_1m
+
+    def _provider_mutation_allowed(self, key, job):
+        if int(job.get("attempt_count") or 0) >= self.max_provider_mutations_per_job:
+            self._transition(key, "HOLD_ATTEMPT_LIMIT", error_code="MAX_PROVIDER_MUTATIONS_PER_JOB")
+            return False, "MAX_PROVIDER_MUTATIONS_PER_JOB"
+        _, _, _, _, mutations_1m = self._count_guard()
+        if mutations_1m >= self.max_api_mutations_per_minute:
+            self._transition(key, "HOLD_MUTATION_RATE", error_code="MAX_API_MUTATIONS_PER_MINUTE")
+            return False, "MAX_API_MUTATIONS_PER_MINUTE"
+        self._event(key, "PROVIDER_MUTATION", {"allowed": True})
+        return True, None
 
     def _credential_gate(self):
         rec = self.load_token_record()
@@ -498,6 +539,7 @@ class PublisherRuntime:
             "attempt_count": job.get("attempt_count"),
             "last_error_code": job.get("last_error_code"),
             "public_publish_authorized": self.public_publish_authorized,
+            "publish_enabled": self.publish_enabled,
         }
 
     def start(self, payload):
@@ -508,16 +550,26 @@ class PublisherRuntime:
                 return 409, {"ok": False, "error": "IDEMPOTENCY_CONFLICT"}
             return 200, self._safe_job(existing, replayed=True)
 
-        initial_status = "NEW" if self.public_publish_authorized else "HOLD_PUBLIC_DISABLED"
-        self._insert_job(intent, initial_status)
         if not self.public_publish_authorized:
+            self._insert_job(intent, "HOLD_PUBLIC_DISABLED")
             return 202, self._safe_job(self._get_job(intent["idempotency_key"]))
+        if not self.publish_enabled:
+            self._insert_job(intent, "HOLD_KILL_SWITCH")
+            return 202, self._safe_job(self._get_job(intent["idempotency_key"]))
+
+        published_24h, inflight, failures_15m, unpublished_queue, mutations_1m = self._count_guard()
+        if unpublished_queue >= self.max_unpublished_queue:
+            self._insert_job(intent, "HOLD_QUEUE_LIMIT")
+            self._transition(intent["idempotency_key"], "HOLD_QUEUE_LIMIT", error_code="MAX_UNPUBLISHED_QUEUE")
+            return 429, self._safe_job(self._get_job(intent["idempotency_key"]))
+
+        self._insert_job(intent, "NEW")
 
         if not self.configured():
             self._transition(intent["idempotency_key"], "HOLD_MEDIA_HOST", error_code="PUBLISHER_NOT_CONFIGURED")
             return 503, self._safe_job(self._get_job(intent["idempotency_key"]))
 
-        published_24h, inflight, failures_15m = self._count_guard()
+        published_24h, inflight, failures_15m, unpublished_queue, mutations_1m = self._count_guard()
         if published_24h >= self.max_daily_publications:
             self._transition(intent["idempotency_key"], "HOLD_BLAST_RADIUS", error_code="MAX_DAILY_PUBLICATIONS")
             return 429, self._safe_job(self._get_job(intent["idempotency_key"]))
@@ -536,6 +588,11 @@ class PublisherRuntime:
         quota_ok, quota = self._provider_quota_gate(rec)
         if not quota_ok:
             self._transition(intent["idempotency_key"], "HOLD_RATE_LIMIT", error_code=quota)
+            return 429, self._safe_job(self._get_job(intent["idempotency_key"]))
+
+        job = self._get_job(intent["idempotency_key"])
+        mutation_ok, _ = self._provider_mutation_allowed(intent["idempotency_key"], job)
+        if not mutation_ok:
             return 429, self._safe_job(self._get_job(intent["idempotency_key"]))
 
         data = {
@@ -626,8 +683,14 @@ class PublisherRuntime:
             if not self.public_publish_authorized:
                 self._transition(key, "HOLD_PUBLIC_DISABLED", error_code="PUBLIC_PUBLISH_DISABLED")
                 return 202, self._safe_job(self._get_job(key))
+            if not self.publish_enabled:
+                self._transition(key, "HOLD_KILL_SWITCH", error_code="PUBLISH_KILL_SWITCH_DISABLED")
+                return 202, self._safe_job(self._get_job(key))
 
-            self._transition(key, "PUBLISH_REQUESTED", provider_status="REQUESTED")
+            mutation_ok, _ = self._provider_mutation_allowed(key, job)
+            if not mutation_ok:
+                return 429, self._safe_job(self._get_job(key))
+            self._transition(key, "PUBLISH_REQUESTED", provider_status="REQUESTED", increment_attempt=True)
             try:
                 http, payload = self.graph(
                     "POST", f"{rec['user_id']}/media_publish", rec["access_token"],
