@@ -312,3 +312,33 @@ FRESH_BROWSER_VERIFICATION:
 - No public publishing action is authorized.
 
 PUBLIC_INSTAGRAM_PUBLISHING = HOLD
+
+
+## Standard Access reconciliation — 2026-09-28
+
+Official Meta App Review documentation (updated Jun 30, 2026) states that an app used only for a business the developer owns or manages, using Instagram Login with Standard Access, does not require App Review.
+
+Official Meta Content Publishing documentation states Instagram Login content publishing supports Standard Access and lists `instagram_business_basic` + `instagram_business_content_publish`.
+
+Trend Radar current scope is exactly one owner-managed account:
+`@trendradarar`
+
+No third-party / customer Instagram account service is authorized.
+
+Current governing decision:
+`review/instagram/INSTAGRAM_STANDARD_ACCESS_DECISION_20260928.md`
+
+Therefore:
+- CURRENT_ACCESS_MODEL = STANDARD_ACCESS
+- META_APP_REVIEW_REQUIRED_FOR_CURRENT_SCOPE = NO
+- ADVANCED_ACCESS = NOT REQUIRED FOR CURRENT OWNER-ONLY SCOPE
+- APP_REVIEW_PACKAGE = CONTINGENCY ONLY IF SCOPE EXPANDS
+- PUBLIC_INSTAGRAM_PUBLISHING = HOLD / false
+
+M26.1 runtime foundation:
+- trusted-domain OAuth = PASS
+- exact identity = PASS
+- encrypted PostgreSQL persistence = PASS
+- restart reload = PASS
+- token refresh = PASS
+- public publish gate remains false
