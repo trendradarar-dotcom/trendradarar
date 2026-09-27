@@ -87,8 +87,19 @@ class DurableState:
                     expires_at INTEGER NOT NULL
                 )"""
             )
+            con.execute(
+                """CREATE TABLE IF NOT EXISTS handoffs(
+                    token_hash TEXT PRIMARY KEY,
+                    sid_cipher BLOB NOT NULL,
+                    next_path TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    expires_at INTEGER NOT NULL,
+                    consumed_at INTEGER
+                )"""
+            )
             con.execute("CREATE INDEX IF NOT EXISTS idx_oauth_states_exp ON oauth_states(expires_at)")
             con.execute("CREATE INDEX IF NOT EXISTS idx_sessions_exp ON sessions(expires_at)")
+            con.execute("CREATE INDEX IF NOT EXISTS idx_handoffs_exp ON handoffs(expires_at)")
 
     def _encrypt_json(self, payload):
         raw = json.dumps(payload, separators=(",", ":"), sort_keys=True, ensure_ascii=False).encode("utf-8")
@@ -211,10 +222,53 @@ class DurableState:
             raise DurableStateError("oauth state session binding failed authentication") from exc
         return {"sid": sid, "ts": int(row["created_at"]), "next_path": str(row["next_path"])}
 
+    def create_handoff(self, token, sid, next_path, now=None, ttl=600):
+        if not token or not sid:
+            raise DurableStateError("handoff token and session id required")
+        now = int(time.time() if now is None else now)
+        ttl = int(ttl)
+        if ttl <= 0:
+            raise DurableStateError("handoff ttl must be positive")
+        token_hash = _sha256(token)
+        sid_cipher = self._fernet.encrypt(sid.encode("utf-8"))
+        with self._lock, closing(self._connect()) as con:
+            con.execute(
+                """INSERT INTO handoffs(
+                    token_hash,sid_cipher,next_path,created_at,expires_at,consumed_at
+                ) VALUES(?,?,?,?,?,NULL)""",
+                (token_hash, sid_cipher, str(next_path), now, now + ttl),
+            )
+
+    def consume_handoff(self, token, now=None):
+        if not token:
+            return None
+        now = int(time.time() if now is None else now)
+        token_hash = _sha256(token)
+        with self._lock, closing(self._connect()) as con:
+            con.execute("BEGIN IMMEDIATE")
+            row = con.execute(
+                """SELECT sid_cipher,next_path,created_at,expires_at,consumed_at
+                   FROM handoffs WHERE token_hash=?""",
+                (token_hash,),
+            ).fetchone()
+            if not row or row["consumed_at"] is not None or int(row["expires_at"]) <= now:
+                if row and int(row["expires_at"]) <= now:
+                    con.execute("DELETE FROM handoffs WHERE token_hash=?", (token_hash,))
+                con.execute("COMMIT")
+                return None
+            con.execute("UPDATE handoffs SET consumed_at=? WHERE token_hash=?", (now, token_hash))
+            con.execute("COMMIT")
+        try:
+            sid = self._fernet.decrypt(bytes(row["sid_cipher"])).decode("utf-8")
+        except (InvalidToken, UnicodeDecodeError) as exc:
+            raise DurableStateError("handoff session binding failed authentication") from exc
+        return {"sid": sid, "ts": int(row["created_at"]), "next_path": str(row["next_path"])}
+
     def cleanup(self, now=None):
         now = int(time.time() if now is None else now)
         with self._lock, closing(self._connect()) as con:
             con.execute("DELETE FROM oauth_states WHERE expires_at<=? OR consumed_at IS NOT NULL", (now,))
+            con.execute("DELETE FROM handoffs WHERE expires_at<=? OR consumed_at IS NOT NULL", (now,))
             con.execute("DELETE FROM sessions WHERE expires_at<=?", (now,))
 
     def health(self):
