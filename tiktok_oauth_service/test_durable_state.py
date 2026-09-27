@@ -44,6 +44,16 @@ class DurableStateTests(unittest.TestCase):
         self.assertEqual(first["sid"], "sid-secret")
         self.assertIsNone(self.store.consume_oauth_state("oauth-state-secret", now=2002))
 
+    def test_handoff_is_one_time_and_not_plaintext(self):
+        self.store.create_handoff("handoff-secret", "sid-secret", "/share", now=3000, ttl=60)
+        with open(self.db, "rb") as f:
+            raw = f.read()
+        self.assertNotIn(b"handoff-secret", raw)
+        self.assertNotIn(b"sid-secret", raw)
+        first = self.store.consume_handoff("handoff-secret", now=3001)
+        self.assertEqual(first["sid"], "sid-secret")
+        self.assertIsNone(self.store.consume_handoff("handoff-secret", now=3002))
+
     def test_expired_state_and_session_fail_closed(self):
         self.store.upsert_session("sid", {"access_token": "x"}, now=10, ttl=2)
         self.store.create_oauth_state("state", "sid", "/share", now=10, ttl=2)
