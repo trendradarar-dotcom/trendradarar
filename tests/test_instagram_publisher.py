@@ -130,6 +130,36 @@ class PublisherContractTests(unittest.TestCase):
                 valid_intent(video_uri="https://example.com/reel.mp4")
             )
 
+    def test_contract_rejects_backend_non_spool_path(self):
+        runtime = MemoryPublisher(
+            expected_username="trendradarar",
+            publish_secret="secret",
+            public_publish_authorized=False,
+            media_host_allowlist=["trendradar-instagram-oauth.onrender.com"],
+            allowed_markets=["SA"],
+            allowed_languages=["ar"],
+        )
+        with self.assertRaises(IntentValidationError):
+            runtime.validate_intent(
+                valid_intent(
+                    video_uri="https://trendradar-instagram-oauth.onrender.com/anything/a.mp4"
+                )
+            )
+
+    def test_media_asset_probe_is_fail_closed(self):
+        runtime = MemoryPublisher(
+            expected_username="trendradarar",
+            publish_secret="secret",
+            public_publish_authorized=False,
+            media_host_allowlist=["media.trendradar.com.co"],
+            allowed_markets=["SA"],
+            allowed_languages=["ar"],
+            media_asset_probe=lambda *_: (False, "MEDIA_ASSET_NOT_ADMITTED"),
+        )
+        with self.assertRaises(IntentValidationError):
+            runtime.validate_intent(valid_intent())
+
+
     def test_contract_rejects_ephemeral_review_media(self):
         runtime = MemoryPublisher(
             expected_username="trendradarar",
@@ -191,6 +221,22 @@ class FlaskBoundaryTests(unittest.TestCase):
         response = self.client.post("/api/reel", data={"consent": "true"})
         self.assertEqual(response.status_code, 403)
         self.assertEqual(response.get_json()["error"], "OWNER_SESSION_REQUIRED")
+
+    def test_machine_media_upload_requires_m2m_secret(self):
+        response = self.client.post("/internal/publish/media")
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.get_json()["error"], "UNAUTHORIZED")
+
+    def test_mp4_signature_preflight(self):
+        fake = b"\x00\x00\x00\x18ftypisom" + b"x" * 20 + b"avc1" + b"x" * 20 + b"mp4a"
+        ok, error = self.module._mp4_signature_preflight(fake, "aac")
+        self.assertTrue(ok)
+        self.assertIsNone(error)
+
+    def test_mp4_signature_rejects_non_mp4(self):
+        ok, error = self.module._mp4_signature_preflight(b"not-an-mp4-container", "")
+        self.assertFalse(ok)
+        self.assertEqual(error, "MEDIA_CONTAINER_NOT_MP4")
 
     def test_machine_publish_requires_m2m_secret(self):
         response = self.client.post("/internal/publish/reel", json=valid_intent())
