@@ -2,14 +2,22 @@
 
 Date: 2026-09-28
 Project: TrendHunter / Trend Radar — TikTok channel only
-Base exact target: f54e2ab4655fe8799865666a5b588fadfd795d19
-Remediation branch: tiktok-reliability-remediation-20260928
+Base exact target: a421e755c31bf8e00a2cffc047db2c7d9e70bcbe
+Remediation branch: tiktok-runtime-reliability-remediation-20260928
 Governance: ALI-PROGRAMMER-GOVERNANCE-GENERAL-1.5.0 + ALI_PRO
 Isolation: TikTok only. No YouTube/Snapchat/Instagram/Tanoub/TCC mutation.
 Main mutation: FORBIDDEN.
 TikTok Developer review mutation/recall/resubmit: FORBIDDEN.
 Public publication: FORBIDDEN.
 TIKTOK_AUDIT_APPROVED: must remain false/unset.
+
+## Exact-target correction
+
+Fresh Render verification established that the live TikTok service `trendradar-tiktok-oauth` is bound to branch `tiktok-oauth-service` and its current LIVE deploy is commit `a421e755c31bf8e00a2cffc047db2c7d9e70bcbe`.
+
+The earlier documentation-review commit `f54e2ab4655fe8799865666a5b588fadfd795d19` is NOT the live runtime target and MUST NOT be used as the production-readiness acceptance target.
+
+The prior branch `tiktok-reliability-remediation-20260928` is therefore superseded and must not be merged or deployed.
 
 ## Discovery verdict
 
