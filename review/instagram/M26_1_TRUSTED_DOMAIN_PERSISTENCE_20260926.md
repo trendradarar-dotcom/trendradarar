@@ -122,3 +122,57 @@ Current M26.1 status:
 - VERIFIED_DELETION_PERSISTENCE = PASS
 - REFRESH_FUNCTIONAL_VERIFICATION = PENDING PROVIDER 24H AGE WINDOW
 - PUBLIC_PUBLISH = HOLD / false
+
+
+## Refresh functional verification — PASS — 2026-09-28
+
+Eligible refresh execution was performed after the provider 24-hour age window.
+
+Render deploy:
+`dep-daspkfrbc2fs738ap4kg`
+
+Exact safe startup evidence:
+```json
+{"account_type":"BUSINESS","event":"INSTAGRAM_REFRESH_SELF_TEST","expires_in":5184000,"ok":true,"professional_user_id":"17841428134382903","public_publish_authorized":false,"status":"REFRESHED_VERIFIED","token_age_seconds":88049,"username":"trendradarar"}
+```
+
+Therefore:
+- long-lived token refresh at provider = PASS
+- post-refresh profile verification = PASS
+- exact username @trendradarar = PASS
+- exact professional user ID 17841428134382903 = PASS
+- account type BUSINESS = PASS
+- encrypted re-persistence after refresh = PASS
+- public publish remained false = PASS
+
+The temporary self-test gate was then returned to:
+`INSTAGRAM_REFRESH_SELF_TEST=false`
+
+Final clean restart deploy:
+`dep-daspl0m0tbcc738ftkmg`
+
+Final runtime verification after the clean restart:
+- configured=true
+- persistence_configured=true
+- persistence_required=true
+- public_publish_authorized=false
+- /share reconstructed @trendradarar
+- account_type=BUSINESS
+- professional_user_id=17841428134382903
+- permissions=instagram_business_basic, instagram_business_content_publish
+
+## M26.1 final verdict
+
+- TRUSTED_DOMAIN = PASS
+- ENCRYPTED_PERSISTENCE = PASS
+- FAIL_CLOSED_PERSISTENCE_REQUIRED = PASS
+- RESTART_RELOAD = PASS
+- VERIFIED_DELETION_PERSISTENCE = PASS
+- REFRESH_FUNCTIONAL_VERIFICATION = PASS
+- FINAL_CLEAN_RESTART = PASS
+- PUBLIC_PUBLISH = HOLD / false
+
+**M26.1 = PASS**
+
+Next external gate:
+Meta Instagram App Review / Advanced Access preparation and submission. Public publishing remains blocked until that gate is separately completed and owner-authorized.
