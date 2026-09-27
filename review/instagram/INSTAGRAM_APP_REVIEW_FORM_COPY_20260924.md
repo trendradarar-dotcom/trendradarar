@@ -41,3 +41,20 @@ Deauthorize callback: https://trendradar-instagram-oauth.onrender.com/deauthoriz
 - exact connected account identity;
 - successful non-public-safe provider execution evidence;
 - any provider-mandated successful publishing call required for Advanced Access/App Review must be separately authorized before a public side effect is performed.
+
+
+## Status change — 2026-09-28
+
+This prepared App Review copy is now **CONTINGENCY ONLY**, not the active production gate.
+
+Reason:
+Meta's current App Review documentation states that an app used only for a business the developer owns or manages, with Instagram Login and Standard Access, does not require App Review.
+
+Trend Radar currently serves only its owner-managed account `@trendradarar` and is not authorized to serve third-party Instagram accounts.
+
+Active decision:
+`review/instagram/INSTAGRAM_STANDARD_ACCESS_DECISION_20260928.md`
+
+Use this App Review package only if scope later expands to multiple businesses / third-party accounts or Meta changes the applicable access requirement.
+
+PUBLIC_INSTAGRAM_PUBLISHING remains HOLD / false.
