@@ -45,6 +45,9 @@ SCOPES = (
 PUBLIC_PUBLISH_AUTHORIZED = os.getenv(
     "INSTAGRAM_PUBLIC_PUBLISH_AUTHORIZED", "false"
 ).lower() == "true"
+PUBLISH_ENABLED = os.getenv(
+    "INSTAGRAM_PUBLISH_ENABLED", "false"
+).lower() == "true"
 
 PUBLISH_M2M_SECRET = os.getenv("INSTAGRAM_PUBLISH_M2M_SECRET", "").strip()
 MEDIA_HOST_ALLOWLIST = [
@@ -65,6 +68,9 @@ ALLOWED_LANGUAGES = [
 MAX_DAILY_PUBLICATIONS = int(os.getenv("INSTAGRAM_MAX_DAILY_PUBLICATIONS", "10"))
 MAX_INFLIGHT_PUBLICATIONS = int(os.getenv("INSTAGRAM_MAX_INFLIGHT_PUBLICATIONS", "1"))
 CIRCUIT_FAILURE_THRESHOLD = int(os.getenv("INSTAGRAM_CIRCUIT_FAILURE_THRESHOLD", "3"))
+MAX_UNPUBLISHED_QUEUE = int(os.getenv("INSTAGRAM_MAX_UNPUBLISHED_QUEUE", "5"))
+MAX_API_MUTATIONS_PER_MINUTE = int(os.getenv("INSTAGRAM_MAX_API_MUTATIONS_PER_MINUTE", "10"))
+MAX_PROVIDER_MUTATIONS_PER_JOB = int(os.getenv("INSTAGRAM_MAX_PROVIDER_MUTATIONS_PER_JOB", "2"))
 PUBLISH_MEDIA_MAX_BYTES = int(os.getenv("INSTAGRAM_PUBLISH_MEDIA_MAX_BYTES", str(25 * 1024 * 1024)))
 PUBLISH_MEDIA_TOTAL_BYTES = int(os.getenv("INSTAGRAM_PUBLISH_MEDIA_TOTAL_BYTES", str(64 * 1024 * 1024)))
 PUBLISH_MEDIA_TTL_SECONDS = int(os.getenv("INSTAGRAM_PUBLISH_MEDIA_TTL_SECONDS", "7200"))
@@ -444,12 +450,16 @@ PUBLISHER = PublisherRuntime(
     expected_username=EXPECTED_USERNAME,
     publish_secret=PUBLISH_M2M_SECRET,
     public_publish_authorized=PUBLIC_PUBLISH_AUTHORIZED,
+    publish_enabled=PUBLISH_ENABLED,
     media_host_allowlist=MEDIA_HOST_ALLOWLIST,
     allowed_markets=ALLOWED_MARKETS,
     allowed_languages=ALLOWED_LANGUAGES,
     max_daily_publications=MAX_DAILY_PUBLICATIONS,
     max_inflight=MAX_INFLIGHT_PUBLICATIONS,
     circuit_failure_threshold=CIRCUIT_FAILURE_THRESHOLD,
+    max_unpublished_queue=MAX_UNPUBLISHED_QUEUE,
+    max_api_mutations_per_minute=MAX_API_MUTATIONS_PER_MINUTE,
+    max_provider_mutations_per_job=MAX_PROVIDER_MUTATIONS_PER_JOB,
     media_asset_probe=_verify_publisher_media_asset,
 )
 
@@ -805,6 +815,7 @@ def health():
             "persistence_configured": _persistence_configured(),
             "persistence_required": PERSISTENCE_REQUIRED,
             "public_publish_authorized": PUBLIC_PUBLISH_AUTHORIZED,
+            "instagram_publish_enabled": PUBLISH_ENABLED,
             "publisher_m2m_configured": bool(PUBLISH_M2M_SECRET),
             "media_host_allowlist_configured": bool(MEDIA_HOST_ALLOWLIST),
             "publisher_control_plane_configured": PUBLISHER.configured(),
@@ -812,6 +823,11 @@ def health():
             "publisher_media_spool_configured": bool(DATABASE_URL and PUBLISH_MEDIA_PUBLIC_BASE_URL),
             "publisher_media_max_bytes": PUBLISH_MEDIA_MAX_BYTES,
             "publisher_media_ttl_seconds": PUBLISH_MEDIA_TTL_SECONDS,
+            "max_daily_publications": MAX_DAILY_PUBLICATIONS,
+            "max_inflight_publications": MAX_INFLIGHT_PUBLICATIONS,
+            "max_unpublished_queue": MAX_UNPUBLISHED_QUEUE,
+            "max_api_mutations_per_minute": MAX_API_MUTATIONS_PER_MINUTE,
+            "max_provider_mutations_per_job": MAX_PROVIDER_MUTATIONS_PER_JOB,
         }
     )
 
@@ -1410,7 +1426,7 @@ def _run_publisher_self_test():
             "rights_status": "PASS",
             "policy_status": "PASS",
             "legal_status": "PASS",
-            "commercial_status": "NOT_COMMERCIAL",
+            "commercial_status": "EDITORIAL_ORIGINAL",
             "scheduled_time": None,
             "idempotency_key": key,
             "correlation_id": "trendradar-publisher-selftest-correlation",
