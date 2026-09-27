@@ -45,6 +45,7 @@ class PublisherRuntime:
         max_daily_publications=10,
         max_inflight=1,
         circuit_failure_threshold=3,
+        media_asset_probe=None,
     ):
         self.db_connect = db_connect
         self.load_token_record = load_token_record
@@ -62,6 +63,7 @@ class PublisherRuntime:
         self.max_daily_publications = int(max_daily_publications)
         self.max_inflight = int(max_inflight)
         self.circuit_failure_threshold = int(circuit_failure_threshold)
+        self.media_asset_probe = media_asset_probe
 
     def configured(self):
         return bool(
@@ -107,8 +109,9 @@ class PublisherRuntime:
         if not allowed:
             raise IntentValidationError("VIDEO_URI_HOST_NOT_ALLOWED")
         # Never permit the ephemeral review media route to become the production source.
-        if host == "trendradar-instagram-oauth.onrender.com" and parsed.path.startswith("/media/"):
-            raise IntentValidationError("EPHEMERAL_MEDIA_URI_FORBIDDEN")
+        if host == "trendradar-instagram-oauth.onrender.com":
+            if not parsed.path.startswith("/publisher-media/"):
+                raise IntentValidationError("BACKEND_MEDIA_PATH_NOT_ALLOWED")
         return uri
 
     def validate_intent(self, payload):
@@ -220,6 +223,14 @@ class PublisherRuntime:
             },
         }
         normalized["contract_sha256"] = self._canonical_hash(normalized)
+        if self.media_asset_probe is not None:
+            ok, error = self.media_asset_probe(
+                normalized["content_asset_id"],
+                normalized["video_uri"],
+                normalized["asset_sha256"],
+            )
+            if not ok:
+                raise IntentValidationError(error or "MEDIA_ASSET_NOT_ADMITTED")
         return normalized
 
     def _ensure_tables(self):
