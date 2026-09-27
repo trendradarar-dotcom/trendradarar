@@ -14,9 +14,10 @@ import requests
 import psycopg
 from cryptography.fernet import Fernet, InvalidToken
 from flask import Flask, Response, jsonify, redirect, request, send_file, session, url_for
+from publisher_runtime import IntentValidationError, PublisherRuntime
 
 APP_NAME = "Trend Radar — Instagram Reels"
-BUILD_REVISION = "M26.1-PERSISTENCE-20260926"
+BUILD_REVISION = "M26.2-PUBLISHER-HARDENING-20260928"
 API_VERSION = os.getenv("INSTAGRAM_API_VERSION", "v26.0").strip() or "v26.0"
 APP_ID = os.getenv("INSTAGRAM_APP_ID", "").strip()
 APP_SECRET = os.getenv("INSTAGRAM_APP_SECRET", "").strip()
@@ -44,9 +45,32 @@ PUBLIC_PUBLISH_AUTHORIZED = os.getenv(
     "INSTAGRAM_PUBLIC_PUBLISH_AUTHORIZED", "false"
 ).lower() == "true"
 
+PUBLISH_M2M_SECRET = os.getenv("INSTAGRAM_PUBLISH_M2M_SECRET", "").strip()
+MEDIA_HOST_ALLOWLIST = [
+    x.strip().lower()
+    for x in os.getenv("INSTAGRAM_MEDIA_HOST_ALLOWLIST", "").split(",")
+    if x.strip()
+]
+ALLOWED_MARKETS = [
+    x.strip()
+    for x in os.getenv("INSTAGRAM_ALLOWED_MARKETS", "SA").split(",")
+    if x.strip()
+]
+ALLOWED_LANGUAGES = [
+    x.strip()
+    for x in os.getenv("INSTAGRAM_ALLOWED_LANGUAGES", "ar").split(",")
+    if x.strip()
+]
+MAX_DAILY_PUBLICATIONS = int(os.getenv("INSTAGRAM_MAX_DAILY_PUBLICATIONS", "10"))
+MAX_INFLIGHT_PUBLICATIONS = int(os.getenv("INSTAGRAM_MAX_INFLIGHT_PUBLICATIONS", "1"))
+CIRCUIT_FAILURE_THRESHOLD = int(os.getenv("INSTAGRAM_CIRCUIT_FAILURE_THRESHOLD", "3"))
+
 app = Flask(__name__)
 app.secret_key = SESSION_SECRET or secrets.token_urlsafe(48)
 app.config["MAX_CONTENT_LENGTH"] = 120 * 1024 * 1024
+app.config["SESSION_COOKIE_SECURE"] = True
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 
 TOKEN_STORE = {}
 MEDIA_STORE = {}
@@ -174,13 +198,13 @@ def _load_persisted_token_record():
 
 
 def _token_record():
-    rec = TOKEN_STORE.get(_sid())
-    if rec:
-        return rec
-    rec = _load_persisted_token_record()
-    if rec:
-        TOKEN_STORE[_sid()] = rec
-    return rec
+    # Browser/session paths must never inherit the durable machine credential.
+    # Durable-token access is reserved for authenticated internal control-plane routes.
+    return TOKEN_STORE.get(_sid())
+
+
+def _owner_session_verified():
+    return bool(session.get("instagram_owner_verified") is True and TOKEN_STORE.get(_sid()))
 
 
 def _base_url():
@@ -216,6 +240,22 @@ def _graph(method, path, token, *, params=None, data=None, timeout=45):
     except Exception:
         payload = {"raw": response.text[:2000]}
     return response.status_code, payload
+
+
+PUBLISHER = PublisherRuntime(
+    db_connect=_db_connect,
+    load_token_record=_load_persisted_token_record,
+    graph=_graph,
+    expected_username=EXPECTED_USERNAME,
+    publish_secret=PUBLISH_M2M_SECRET,
+    public_publish_authorized=PUBLIC_PUBLISH_AUTHORIZED,
+    media_host_allowlist=MEDIA_HOST_ALLOWLIST,
+    allowed_markets=ALLOWED_MARKETS,
+    allowed_languages=ALLOWED_LANGUAGES,
+    max_daily_publications=MAX_DAILY_PUBLICATIONS,
+    max_inflight=MAX_INFLIGHT_PUBLICATIONS,
+    circuit_failure_threshold=CIRCUIT_FAILURE_THRESHOLD,
+)
 
 
 def _refresh_long_lived_token(rec):
@@ -569,6 +609,10 @@ def health():
             "persistence_configured": _persistence_configured(),
             "persistence_required": PERSISTENCE_REQUIRED,
             "public_publish_authorized": PUBLIC_PUBLISH_AUTHORIZED,
+            "publisher_m2m_configured": bool(PUBLISH_M2M_SECRET),
+            "media_host_allowlist_configured": bool(MEDIA_HOST_ALLOWLIST),
+            "publisher_control_plane_configured": PUBLISHER.configured(),
+            "browser_public_publish_enabled": False,
         }
     )
 
@@ -722,14 +766,15 @@ def instagram_callback():
     if not _persist_token_record(rec):
         return jsonify({"ok": False, "error": "TOKEN_PERSISTENCE_FAILED"}), 503
     TOKEN_STORE[_sid()] = rec
+    session["instagram_owner_verified"] = True
     return redirect(url_for("share"))
 
 
 @app.get("/share")
 def share():
+    if not _owner_session_verified():
+        return jsonify({"ok": False, "error": "OWNER_SESSION_REQUIRED"}), 403
     rec = _token_record()
-    if not rec:
-        return redirect(url_for("home"))
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Share to Instagram — Trend Radar</title>
@@ -766,9 +811,9 @@ When disabled, Trend Radar creates and verifies the Reel container but does not 
 @app.post("/api/reel")
 def prepare_reel():
     _cleanup_media()
+    if not _owner_session_verified():
+        return jsonify({"ok": False, "error": "OWNER_SESSION_REQUIRED"}), 403
     rec = _token_record()
-    if not rec:
-        return jsonify({"ok": False, "error": "NOT_CONNECTED"}), 401
     if request.form.get("consent") != "true":
         return jsonify({"ok": False, "error": "EXPLICIT_CONSENT_REQUIRED"}), 400
 
@@ -858,50 +903,48 @@ def prepare_reel():
             }
         ), 504
 
-    if not PUBLIC_PUBLISH_AUTHORIZED:
-        return jsonify(
-            {
-                "ok": True,
-                "status": "PREPARED_NOT_PUBLISHED",
-                "container_id": container_id,
-                "provider_status": status_payload,
-                "public_publish_authorized": False,
-                "message": "Container is FINISHED. media_publish was intentionally not called.",
-            }
-        ), 201
-
-    publish_http, publish_payload = _graph(
-        "POST",
-        f"{rec['user_id']}/media_publish",
-        rec["access_token"],
-        data={"creation_id": container_id},
-    )
-    if publish_http >= 400 or not publish_payload.get("id"):
-        return jsonify(
-            {
-                "ok": False,
-                "stage": "MEDIA_PUBLISH",
-                "http": publish_http,
-                "provider": publish_payload,
-                "container_id": container_id,
-            }
-        ), 502
-
-    try:
-        path.unlink(missing_ok=True)
-        MEDIA_STORE.pop(media_id, None)
-    except Exception:
-        pass
-
     return jsonify(
         {
             "ok": True,
-            "status": "PUBLISHED",
+            "status": "PREPARED_NOT_PUBLISHED",
             "container_id": container_id,
-            "media_id": publish_payload.get("id"),
-            "public_publish_authorized": True,
+            "provider_status": status_payload,
+            "public_publish_authorized": PUBLIC_PUBLISH_AUTHORIZED,
+            "browser_public_publish_enabled": False,
+            "message": "Browser review flow never calls media_publish. Public publishing is machine-control-plane only.",
         }
     ), 201
+
+
+@app.post("/internal/publish/reel")
+def internal_publish_reel():
+    supplied = request.headers.get("X-TrendRadar-Publish", "")
+    if not PUBLISHER.authorize(supplied):
+        return jsonify({"ok": False, "error": "UNAUTHORIZED"}), 403
+    try:
+        status, payload = PUBLISHER.start(request.get_json(silent=True) or {})
+    except IntentValidationError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    return jsonify(payload), status
+
+
+@app.post("/internal/publish/reconcile")
+def internal_publish_reconcile():
+    supplied = request.headers.get("X-TrendRadar-Publish", "")
+    if not PUBLISHER.authorize(supplied):
+        return jsonify({"ok": False, "error": "UNAUTHORIZED"}), 403
+    body = request.get_json(silent=True) or {}
+    status, payload = PUBLISHER.reconcile(body.get("idempotency_key"))
+    return jsonify(payload), status
+
+
+@app.get("/internal/publish/status/<idempotency_key>")
+def internal_publish_status(idempotency_key):
+    supplied = request.headers.get("X-TrendRadar-Publish", "")
+    if not PUBLISHER.authorize(supplied):
+        return jsonify({"ok": False, "error": "UNAUTHORIZED"}), 403
+    status, payload = PUBLISHER.status(idempotency_key)
+    return jsonify(payload), status
 
 
 @app.get("/media/<media_id>.mp4")
@@ -918,7 +961,15 @@ def media(media_id):
 
 @app.get("/disconnect")
 def disconnect():
-    TOKEN_STORE.pop(_sid(), None)
+    if not _owner_session_verified():
+        return jsonify({"ok": False, "error": "OWNER_SESSION_REQUIRED"}), 403
+    sid = _sid()
+    rec = TOKEN_STORE.get(sid)
+    if rec and rec.get("user_id"):
+        persistence_ok, _ = _delete_user(rec["user_id"])
+        if not persistence_ok:
+            return jsonify({"ok": False, "error": "TOKEN_DELETION_FAILED"}), 503
+    TOKEN_STORE.pop(sid, None)
     session.clear()
     return redirect(url_for("home"))
 
@@ -927,12 +978,11 @@ def disconnect():
 def deauthorize():
     signed = request.values.get("signed_request", "")
     payload = _parse_signed_request(signed)
-    if payload and payload.get("user_id"):
-        persistence_ok, _ = _delete_user(payload["user_id"])
-        if not persistence_ok:
-            return jsonify({"ok": False, "error": "TOKEN_DELETION_FAILED"}), 503
-    else:
-        TOKEN_STORE.pop(_sid(), None)
+    if not payload or not payload.get("user_id"):
+        return jsonify({"ok": False, "error": "INVALID_SIGNED_REQUEST"}), 400
+    persistence_ok, _ = _delete_user(payload["user_id"])
+    if not persistence_ok:
+        return jsonify({"ok": False, "error": "TOKEN_DELETION_FAILED"}), 503
     session.clear()
     return jsonify({"ok": True, "status": "DEAUTHORIZED"})
 
