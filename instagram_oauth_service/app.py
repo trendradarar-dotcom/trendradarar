@@ -71,6 +71,7 @@ PUBLISH_MEDIA_TTL_SECONDS = int(os.getenv("INSTAGRAM_PUBLISH_MEDIA_TTL_SECONDS",
 PUBLISH_MEDIA_PUBLIC_BASE_URL = os.getenv(
     "INSTAGRAM_PUBLISH_MEDIA_BASE_URL", PUBLIC_BASE_URL
 ).strip().rstrip("/")
+PUBLISHER_SELF_TEST = os.getenv("INSTAGRAM_PUBLISHER_SELF_TEST", "false").lower() == "true"
 
 app = Flask(__name__)
 app.secret_key = SESSION_SECRET or secrets.token_urlsafe(48)
@@ -1354,8 +1355,111 @@ def _run_refresh_self_test():
     print(json.dumps(evidence, sort_keys=True), flush=True)
 
 
+def _run_publisher_self_test():
+    evidence = {
+        "event": "INSTAGRAM_PUBLISHER_SELF_TEST",
+        "public_publish_authorized": PUBLIC_PUBLISH_AUTHORIZED,
+    }
+    key = "trendradar-publisher-selftest"
+    asset_id = "trendradar-publisher-selftest-asset"
+    try:
+        if PUBLIC_PUBLISH_AUTHORIZED:
+            evidence.update({"ok": False, "status": "REFUSED_WHILE_PUBLIC_PUBLISH_ENABLED"})
+            print(json.dumps(evidence, sort_keys=True), flush=True)
+            return
+        if not PUBLISHER.authorize(PUBLISH_M2M_SECRET):
+            evidence.update({"ok": False, "status": "M2M_AUTH_FAILED"})
+            print(json.dumps(evidence, sort_keys=True), flush=True)
+            return
+
+        fake_mp4 = b"\x00\x00\x00\x18ftypisom" + (b"x" * 64) + b"avc1" + (b"x" * 64) + b"mp4a"
+        metadata = {
+            "mime_type": "video/mp4",
+            "size_bytes": len(fake_mp4),
+            "duration_seconds": 2,
+            "width": 1080,
+            "height": 1920,
+            "fps": 30,
+            "video_codec": "h264",
+            "audio_codec": "aac",
+        }
+        media_http, media_payload = _store_publisher_media(
+            asset_id,
+            fake_mp4,
+            metadata,
+            hashlib.sha256(fake_mp4).hexdigest(),
+        )
+        if media_http not in {200, 201} or not media_payload.get("ok"):
+            evidence.update({
+                "ok": False,
+                "status": "MEDIA_SPOOL_FAILED",
+                "error": media_payload.get("error"),
+            })
+            print(json.dumps(evidence, sort_keys=True), flush=True)
+            return
+
+        intent = {
+            "publication_id": "trendradar-publisher-selftest-publication",
+            "content_asset_id": asset_id,
+            "video_uri": media_payload["video_uri"],
+            "asset_sha256": media_payload["asset_sha256"],
+            "caption": "self-test",
+            "hashtags": [],
+            "market": "SA",
+            "language": "ar",
+            "rights_status": "PASS",
+            "policy_status": "PASS",
+            "legal_status": "PASS",
+            "commercial_status": "NOT_COMMERCIAL",
+            "scheduled_time": None,
+            "idempotency_key": key,
+            "correlation_id": "trendradar-publisher-selftest-correlation",
+            "is_ai_generated": True,
+            "media": metadata,
+        }
+        first_http, first = PUBLISHER.start(intent)
+        second_http, second = PUBLISHER.start(intent)
+        ok = (
+            first_http == 202
+            and first.get("status") == "HOLD_PUBLIC_DISABLED"
+            and second_http == 200
+            and second.get("status") == "HOLD_PUBLIC_DISABLED"
+            and second.get("replayed") is True
+        )
+        evidence.update({
+            "ok": ok,
+            "status": "SELF_TEST_PASS" if ok else "SELF_TEST_FAILED",
+            "media_spool": "PASS",
+            "m2m_auth": "PASS",
+            "idempotency": "PASS" if second.get("replayed") is True else "FAIL",
+            "publish_gate": first.get("status"),
+        })
+    except Exception as exc:
+        evidence.update({
+            "ok": False,
+            "status": "SELF_TEST_EXCEPTION",
+            "exception_type": type(exc).__name__,
+        })
+    finally:
+        try:
+            with _db_connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("DELETE FROM instagram_publication_events WHERE idempotency_key = %s", (key,))
+                    cur.execute("DELETE FROM instagram_publication_jobs WHERE idempotency_key = %s", (key,))
+                    cur.execute("DELETE FROM instagram_media_assets WHERE content_asset_id = %s", (asset_id,))
+                conn.commit()
+        except Exception:
+            evidence["cleanup"] = "FAILED"
+        else:
+            evidence["cleanup"] = "PASS"
+        print(json.dumps(evidence, sort_keys=True), flush=True)
+
+
 if REFRESH_SELF_TEST:
     _run_refresh_self_test()
+
+if PUBLISHER_SELF_TEST:
+    _run_publisher_self_test()
 
 
 if __name__ == "__main__":
