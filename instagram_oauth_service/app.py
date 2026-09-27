@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import hmac
+import io
 import json
 import os
 import secrets
@@ -64,6 +65,12 @@ ALLOWED_LANGUAGES = [
 MAX_DAILY_PUBLICATIONS = int(os.getenv("INSTAGRAM_MAX_DAILY_PUBLICATIONS", "10"))
 MAX_INFLIGHT_PUBLICATIONS = int(os.getenv("INSTAGRAM_MAX_INFLIGHT_PUBLICATIONS", "1"))
 CIRCUIT_FAILURE_THRESHOLD = int(os.getenv("INSTAGRAM_CIRCUIT_FAILURE_THRESHOLD", "3"))
+PUBLISH_MEDIA_MAX_BYTES = int(os.getenv("INSTAGRAM_PUBLISH_MEDIA_MAX_BYTES", str(25 * 1024 * 1024)))
+PUBLISH_MEDIA_TOTAL_BYTES = int(os.getenv("INSTAGRAM_PUBLISH_MEDIA_TOTAL_BYTES", str(64 * 1024 * 1024)))
+PUBLISH_MEDIA_TTL_SECONDS = int(os.getenv("INSTAGRAM_PUBLISH_MEDIA_TTL_SECONDS", "7200"))
+PUBLISH_MEDIA_PUBLIC_BASE_URL = os.getenv(
+    "INSTAGRAM_PUBLISH_MEDIA_BASE_URL", PUBLIC_BASE_URL
+).strip().rstrip("/")
 
 app = Flask(__name__)
 app.secret_key = SESSION_SECRET or secrets.token_urlsafe(48)
@@ -224,6 +231,193 @@ def _cleanup_media():
             MEDIA_STORE.pop(media_id, None)
 
 
+def _ensure_publisher_media_table():
+    if not DATABASE_URL:
+        return False
+    with _db_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS instagram_media_assets (
+                    content_asset_id TEXT PRIMARY KEY,
+                    public_token TEXT NOT NULL UNIQUE,
+                    sha256 TEXT NOT NULL,
+                    mime_type TEXT NOT NULL,
+                    size_bytes BIGINT NOT NULL,
+                    metadata_json JSONB NOT NULL,
+                    data BYTEA NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    expires_at TIMESTAMPTZ NOT NULL
+                )
+                """
+            )
+        conn.commit()
+    return True
+
+
+def _cleanup_publisher_media():
+    if not DATABASE_URL:
+        return
+    try:
+        _ensure_publisher_media_table()
+        with _db_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM instagram_media_assets WHERE expires_at <= NOW()")
+            conn.commit()
+    except Exception:
+        pass
+
+
+def _mp4_signature_preflight(blob, declared_audio_codec=""):
+    if not isinstance(blob, (bytes, bytearray)) or len(blob) < 16:
+        return False, "MEDIA_TOO_SMALL"
+    # ISO-BMFF/MP4 must expose an ftyp box near the head.
+    if b"ftyp" not in bytes(blob[:64]):
+        return False, "MEDIA_CONTAINER_NOT_MP4"
+    sample = bytes(blob)
+    if b"avc1" not in sample and b"avc3" not in sample:
+        return False, "MEDIA_H264_SIGNATURE_NOT_FOUND"
+    audio = str(declared_audio_codec or "").strip().lower()
+    if audio not in {"", "none"} and b"mp4a" not in sample:
+        return False, "MEDIA_AAC_SIGNATURE_NOT_FOUND"
+    return True, None
+
+
+def _store_publisher_media(content_asset_id, blob, metadata, declared_sha256=""):
+    if not DATABASE_URL:
+        return 503, {"ok": False, "error": "PERSISTENCE_NOT_CONFIGURED"}
+    asset_id = str(content_asset_id or "").strip()
+    if not asset_id or len(asset_id) > 200:
+        return 400, {"ok": False, "error": "CONTENT_ASSET_ID_INVALID"}
+    if not isinstance(blob, (bytes, bytearray)):
+        return 400, {"ok": False, "error": "VIDEO_REQUIRED"}
+    size = len(blob)
+    if size <= 0 or size > PUBLISH_MEDIA_MAX_BYTES:
+        return 413, {"ok": False, "error": "MEDIA_SIZE_OUT_OF_RANGE"}
+
+    actual_sha = hashlib.sha256(blob).hexdigest()
+    declared = str(declared_sha256 or "").strip().lower()
+    if declared and not hmac.compare_digest(declared, actual_sha):
+        return 409, {"ok": False, "error": "ASSET_SHA256_MISMATCH"}
+
+    if not isinstance(metadata, dict):
+        return 400, {"ok": False, "error": "MEDIA_METADATA_INVALID"}
+    mime_type = str(metadata.get("mime_type") or "").strip().lower()
+    if mime_type not in {"video/mp4", "application/mp4"}:
+        return 400, {"ok": False, "error": "MEDIA_MIME_NOT_ALLOWED"}
+
+    ok, error = _mp4_signature_preflight(blob, metadata.get("audio_codec"))
+    if not ok:
+        return 400, {"ok": False, "error": error}
+
+    _cleanup_publisher_media()
+    _ensure_publisher_media_table()
+    with _db_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT public_token, sha256, expires_at > NOW()
+                FROM instagram_media_assets
+                WHERE content_asset_id = %s
+                """,
+                (asset_id,),
+            )
+            existing = cur.fetchone()
+            if existing:
+                if not hmac.compare_digest(str(existing[1]), actual_sha):
+                    return 409, {"ok": False, "error": "CONTENT_ASSET_ID_CONFLICT"}
+                if bool(existing[2]):
+                    base = PUBLISH_MEDIA_PUBLIC_BASE_URL or _base_url()
+                    return 200, {
+                        "ok": True,
+                        "status": "MEDIA_ALREADY_ADMITTED",
+                        "content_asset_id": asset_id,
+                        "asset_sha256": actual_sha,
+                        "size_bytes": size,
+                        "video_uri": f"{base}/publisher-media/{existing[0]}.mp4",
+                    }
+
+            cur.execute(
+                """
+                SELECT COALESCE(SUM(size_bytes), 0)
+                FROM instagram_media_assets
+                WHERE expires_at > NOW()
+                """
+            )
+            current_bytes = int(cur.fetchone()[0] or 0)
+            if current_bytes + size > PUBLISH_MEDIA_TOTAL_BYTES:
+                return 507, {"ok": False, "error": "MEDIA_SPOOL_CAPACITY_EXCEEDED"}
+
+            token = secrets.token_urlsafe(32)
+            cur.execute(
+                """
+                INSERT INTO instagram_media_assets(
+                    content_asset_id, public_token, sha256, mime_type, size_bytes,
+                    metadata_json, data, created_at, expires_at
+                ) VALUES (%s,%s,%s,%s,%s,%s::jsonb,%s,NOW(),NOW() + (%s * INTERVAL '1 second'))
+                ON CONFLICT (content_asset_id)
+                DO UPDATE SET
+                    public_token = EXCLUDED.public_token,
+                    sha256 = EXCLUDED.sha256,
+                    mime_type = EXCLUDED.mime_type,
+                    size_bytes = EXCLUDED.size_bytes,
+                    metadata_json = EXCLUDED.metadata_json,
+                    data = EXCLUDED.data,
+                    created_at = NOW(),
+                    expires_at = EXCLUDED.expires_at
+                """,
+                (
+                    asset_id, token, actual_sha, mime_type, size,
+                    json.dumps(metadata, separators=(",", ":"), sort_keys=True),
+                    bytes(blob), PUBLISH_MEDIA_TTL_SECONDS,
+                ),
+            )
+        conn.commit()
+
+    base = PUBLISH_MEDIA_PUBLIC_BASE_URL or _base_url()
+    return 201, {
+        "ok": True,
+        "status": "MEDIA_ADMITTED",
+        "content_asset_id": asset_id,
+        "asset_sha256": actual_sha,
+        "size_bytes": size,
+        "video_uri": f"{base}/publisher-media/{token}.mp4",
+        "expires_in": PUBLISH_MEDIA_TTL_SECONDS,
+    }
+
+
+def _verify_publisher_media_asset(content_asset_id, video_uri, asset_sha256):
+    if not DATABASE_URL:
+        return False, "PERSISTENCE_NOT_CONFIGURED"
+    try:
+        token = str(video_uri or "").rsplit("/", 1)[-1]
+        if token.endswith(".mp4"):
+            token = token[:-4]
+        if not token:
+            return False, "MEDIA_TOKEN_INVALID"
+        _ensure_publisher_media_table()
+        with _db_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT sha256
+                    FROM instagram_media_assets
+                    WHERE content_asset_id = %s
+                      AND public_token = %s
+                      AND expires_at > NOW()
+                    """,
+                    (str(content_asset_id), token),
+                )
+                row = cur.fetchone()
+        if not row:
+            return False, "MEDIA_ASSET_NOT_FOUND_OR_EXPIRED"
+        if not hmac.compare_digest(str(row[0]), str(asset_sha256 or "").lower()):
+            return False, "MEDIA_ASSET_SHA256_MISMATCH"
+        return True, None
+    except Exception:
+        return False, "MEDIA_ASSET_PROBE_FAILED"
+
+
 def _graph(method, path, token, *, params=None, data=None, timeout=45):
     url = f"https://graph.instagram.com/{API_VERSION}/{path.lstrip('/')}"
     headers = {"Authorization": f"Bearer {token}"}
@@ -255,6 +449,7 @@ PUBLISHER = PublisherRuntime(
     max_daily_publications=MAX_DAILY_PUBLICATIONS,
     max_inflight=MAX_INFLIGHT_PUBLICATIONS,
     circuit_failure_threshold=CIRCUIT_FAILURE_THRESHOLD,
+    media_asset_probe=_verify_publisher_media_asset,
 )
 
 
@@ -613,6 +808,9 @@ def health():
             "media_host_allowlist_configured": bool(MEDIA_HOST_ALLOWLIST),
             "publisher_control_plane_configured": PUBLISHER.configured(),
             "browser_public_publish_enabled": False,
+            "publisher_media_spool_configured": bool(DATABASE_URL and PUBLISH_MEDIA_PUBLIC_BASE_URL),
+            "publisher_media_max_bytes": PUBLISH_MEDIA_MAX_BYTES,
+            "publisher_media_ttl_seconds": PUBLISH_MEDIA_TTL_SECONDS,
         }
     )
 
@@ -914,6 +1112,67 @@ def prepare_reel():
             "message": "Browser review flow never calls media_publish. Public publishing is machine-control-plane only.",
         }
     ), 201
+
+
+@app.post("/internal/publish/media")
+def internal_publish_media():
+    supplied = request.headers.get("X-TrendRadar-Publish", "")
+    if not PUBLISHER.authorize(supplied):
+        return jsonify({"ok": False, "error": "UNAUTHORIZED"}), 403
+    upload = request.files.get("video")
+    if not upload:
+        return jsonify({"ok": False, "error": "VIDEO_REQUIRED"}), 400
+    blob = upload.read(PUBLISH_MEDIA_MAX_BYTES + 1)
+    if len(blob) > PUBLISH_MEDIA_MAX_BYTES:
+        return jsonify({"ok": False, "error": "MEDIA_SIZE_OUT_OF_RANGE"}), 413
+    try:
+        metadata = json.loads(request.form.get("media_metadata") or "{}")
+    except Exception:
+        return jsonify({"ok": False, "error": "MEDIA_METADATA_INVALID"}), 400
+    status, payload = _store_publisher_media(
+        request.form.get("content_asset_id"),
+        blob,
+        metadata,
+        request.form.get("asset_sha256"),
+    )
+    return jsonify(payload), status
+
+
+@app.get("/publisher-media/<public_token>.mp4")
+def publisher_media(public_token):
+    token = str(public_token or "").strip()
+    if len(token) < 32 or len(token) > 128:
+        return jsonify({"ok": False, "error": "MEDIA_NOT_FOUND_OR_EXPIRED"}), 404
+    try:
+        _cleanup_publisher_media()
+        _ensure_publisher_media_table()
+        with _db_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT data, mime_type, sha256
+                    FROM instagram_media_assets
+                    WHERE public_token = %s
+                      AND expires_at > NOW()
+                    """,
+                    (token,),
+                )
+                row = cur.fetchone()
+        if not row:
+            return jsonify({"ok": False, "error": "MEDIA_NOT_FOUND_OR_EXPIRED"}), 404
+        data = bytes(row[0]) if not isinstance(row[0], bytes) else row[0]
+        response = send_file(
+            io.BytesIO(data),
+            mimetype=str(row[1] or "video/mp4"),
+            download_name="reel.mp4",
+            conditional=True,
+            etag=str(row[2]),
+            max_age=300,
+        )
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
+    except Exception:
+        return jsonify({"ok": False, "error": "MEDIA_NOT_FOUND_OR_EXPIRED"}), 404
 
 
 @app.post("/internal/publish/reel")
