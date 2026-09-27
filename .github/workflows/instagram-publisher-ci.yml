@@ -31,5 +31,6 @@ jobs:
           python -m py_compile instagram_oauth_service/app.py
           python -m py_compile instagram_oauth_service/publisher_runtime.py
           python -m py_compile instagram_oauth_service/refresh_cron.py
+          python -m py_compile instagram_oauth_service/trendhunter_instagram_publisher.py
       - name: Run adversarial publisher tests
         run: python -m unittest -v tests.test_instagram_publisher
