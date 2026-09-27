@@ -24,7 +24,7 @@ def valid_intent(**overrides):
         "rights_status": "PASS",
         "policy_status": "PASS",
         "legal_status": "PASS",
-        "commercial_status": "NOT_COMMERCIAL",
+        "commercial_status": "EDITORIAL_ORIGINAL",
         "scheduled_time": None,
         "idempotency_key": "idem-001",
         "correlation_id": "corr-001",
@@ -86,11 +86,12 @@ class MemoryPublisher(PublisherRuntime):
 
 
 class PublisherContractTests(unittest.TestCase):
-    def make_runtime(self, public=False):
+    def make_runtime(self, public=False, enabled=False):
         return MemoryPublisher(
             expected_username="trendradarar",
             publish_secret="secret",
             public_publish_authorized=public,
+            publish_enabled=enabled,
             media_host_allowlist=["media.trendradar.com.co"],
             allowed_markets=["SA"],
             allowed_languages=["ar"],
@@ -109,7 +110,7 @@ class PublisherContractTests(unittest.TestCase):
         runtime = self.make_runtime()
         intent = runtime.validate_intent(valid_intent())
         self.assertEqual(intent["rights_status"], "PASS")
-        self.assertEqual(intent["commercial_status"], "NOT_COMMERCIAL")
+        self.assertEqual(intent["commercial_status"], "EDITORIAL_ORIGINAL")
         self.assertEqual(intent["market"], "SA")
         self.assertEqual(intent["language"], "ar")
 
@@ -135,6 +136,7 @@ class PublisherContractTests(unittest.TestCase):
             expected_username="trendradarar",
             publish_secret="secret",
             public_publish_authorized=False,
+            publish_enabled=False,
             media_host_allowlist=["trendradar-instagram-oauth.onrender.com"],
             allowed_markets=["SA"],
             allowed_languages=["ar"],
@@ -151,6 +153,7 @@ class PublisherContractTests(unittest.TestCase):
             expected_username="trendradarar",
             publish_secret="secret",
             public_publish_authorized=False,
+            publish_enabled=False,
             media_host_allowlist=["media.trendradar.com.co"],
             allowed_markets=["SA"],
             allowed_languages=["ar"],
@@ -165,6 +168,7 @@ class PublisherContractTests(unittest.TestCase):
             expected_username="trendradarar",
             publish_secret="secret",
             public_publish_authorized=False,
+            publish_enabled=False,
             media_host_allowlist=["trendradar-instagram-oauth.onrender.com"],
             allowed_markets=["SA"],
             allowed_languages=["ar"],
@@ -175,6 +179,32 @@ class PublisherContractTests(unittest.TestCase):
                     video_uri="https://trendradar-instagram-oauth.onrender.com/media/x.mp4"
                 )
             )
+
+    def test_kill_switch_blocks_even_when_owner_authorizes_public_publish(self):
+        runtime = self.make_runtime(public=True, enabled=False)
+        status, result = runtime.start(valid_intent())
+        self.assertEqual(status, 202)
+        self.assertEqual(result["status"], "HOLD_KILL_SWITCH")
+        self.assertTrue(result["public_publish_authorized"])
+        self.assertFalse(result["publish_enabled"])
+
+    def test_editorial_original_is_the_only_phase_one_commercial_class(self):
+        runtime = self.make_runtime()
+        self.assertEqual(
+            runtime.validate_intent(valid_intent())["commercial_status"],
+            "EDITORIAL_ORIGINAL",
+        )
+        for blocked in (
+            "OWN_PRODUCT",
+            "SPONSORED",
+            "AFFILIATE",
+            "PAID_PARTNERSHIP",
+            "UNKNOWN_COMMERCIAL",
+            "NOT_COMMERCIAL",
+        ):
+            with self.subTest(blocked=blocked):
+                with self.assertRaises(IntentValidationError):
+                    runtime.validate_intent(valid_intent(commercial_status=blocked))
 
     def test_public_disabled_creates_hold_without_provider_call(self):
         runtime = self.make_runtime(public=False)
@@ -253,6 +283,7 @@ class FlaskBoundaryTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.get_json()
         self.assertFalse(body["public_publish_authorized"])
+        self.assertFalse(body["instagram_publish_enabled"])
         self.assertFalse(body["browser_public_publish_enabled"])
 
 
