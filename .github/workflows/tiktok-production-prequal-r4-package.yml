@@ -1,0 +1,162 @@
+name: TikTok R4 Production Prequalification Package
+
+on:
+  push:
+    branches:
+      - tiktok-production-admission-prep-20260929
+    paths:
+      - .github/workflows/tiktok-production-prequal-r4-package.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-r4-package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact frozen R4 candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: dd8e9bac48c8208f3f51bcc83b916db402050d42
+          path: candidate_repo
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout R4 handoff instructions
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: 4973d9bd2d0cd552f31b23c09b5da8786c0ada37
+          path: handoff_repo
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Build exact-target-bound R4 package
+        shell: bash
+        run: |
+          set -euo pipefail
+          PACKAGE="TrendRadar-TikTok-Production-Prequalification-R4-20260929-dd8e9bac"
+          mkdir -p "$PACKAGE/exact_target" "$PACKAGE/candidate" "$PACKAGE/producer_evidence"
+
+          cd candidate_repo
+          ACTUAL_COMMIT="$(git rev-parse HEAD)"
+          ACTUAL_TREE="$(git rev-parse 'HEAD^{tree}')"
+          test "$ACTUAL_COMMIT" = "dd8e9bac48c8208f3f51bcc83b916db402050d42"
+          test "$ACTUAL_TREE" = "3beafc241aa5e54f933b4ec4f2a49b8c424c2c2f"
+
+          git bundle create "../$PACKAGE/exact_target/TikTok-R4-Exact-Target-dd8e9bac.bundle" HEAD
+          git archive --format=tar --output="../$PACKAGE/exact_target/full-repository-snapshot.tar" HEAD
+          git archive --format=tar HEAD | tar -x -C "../$PACKAGE/candidate"
+          git ls-tree -r --full-tree HEAD > "../$PACKAGE/exact_target/FULL_TREE_LS.txt"
+
+          python tools/generate_tiktok_sbom.py             --commit "$ACTUAL_COMMIT"             --output "../$PACKAGE/exact_target/TIKTOK_SBOM_R4.cdx.json"
+
+          {
+            echo "EXACT_COMMIT=$ACTUAL_COMMIT"
+            echo "EXACT_TREE=$ACTUAL_TREE"
+            git show --no-patch --format='COMMIT=%H%nTREE=%T%nPARENTS=%P%nAUTHOR_DATE=%aI%nCOMMITTER_DATE=%cI%nSUBJECT=%s' HEAD
+          } > "../$PACKAGE/exact_target/GIT_SHOW_COMMIT_TREE.txt"
+          cd ..
+
+          cp handoff_repo/review/tiktok/TIKTOK_INDEPENDENT_PRODUCTION_PREQUAL_REQUEST_R4_20260929.md "$PACKAGE/INDEPENDENT_REVIEW_README.md"
+          cp handoff_repo/review/tiktok/TIKTOK_REVIEWER_ACTIONS_R4_AR_20260929.md "$PACKAGE/REVIEWER_ACTIONS_AR.md"
+          cp handoff_repo/review/tiktok/TIKTOK_R3_INDEPENDENT_CLOSURE_RECORD_20260929.md "$PACKAGE/R3_INDEPENDENT_CLOSURE_RECORD.md"
+
+          cat > "$PACKAGE/EXACT_TARGET.txt" <<'EOF'
+          PROJECT=TrendHunter / Trend Radar
+          SCOPE=TikTok only
+          REPOSITORY=trendradarar-dotcom/trendradarar
+          FROZEN_REVIEW_BRANCH=tiktok-production-admission-candidate-20260929-r4
+          EXACT_COMMIT=dd8e9bac48c8208f3f51bcc83b916db402050d42
+          EXACT_TREE=3beafc241aa5e54f933b4ec4f2a49b8c424c2c2f
+          BASE_ACCEPTED_R3_COMMIT=47be83f732e63ffc04362f19820c9818e3d574a9
+          TIKTOK_AUDIT_APPROVED=false/unset
+          PUBLIC_AUTO_PUBLISH=NOT_AUTHORIZED
+          CANDIDATE_DEPLOYED=false
+          EOF
+
+          cat > "$PACKAGE/START_HERE.md" <<'EOF'
+          # START HERE — TikTok R4 Production Admission Pre-Qualification
+
+          1. Verify package manifest.
+          2. Verify Git bundle and exact commit/tree.
+          3. Rebuild root tree from full-repository-snapshot.tar.
+          4. If Exact Target is not PASS, stop Fail-Closed.
+          5. Read INDEPENDENT_REVIEW_README.md in full.
+          6. Treat producer evidence as untrusted orientation only.
+          7. R4 is local/read-only pre-qualification; do not deploy or alter production.
+          8. Independently test recovery-marker/backup/restore tooling and alert watchdog.
+          9. Perform focused R3 safety regression and architecture pre-review.
+          10. Do not infer production persistence or alert delivery from local tooling.
+          11. Use only PASS / FAIL / NOT VERIFIED / N/A.
+          12. Final production auto-publish must remain NOT AUTHORIZED unless real production gates are separately proven.
+          EOF
+
+          cat > "$PACKAGE/producer_evidence/PRODUCER_EVIDENCE.md" <<'EOF'
+          # Producer evidence — NOT independent acceptance
+
+          Producer-observed preparation facts:
+          - R4 exact candidate: dd8e9bac48c8208f3f51bcc83b916db402050d42
+          - R4 exact tree: 3beafc241aa5e54f933b4ec4f2a49b8c424c2c2f
+          - Base R3 independent target: 47be83f732e63ffc04362f19820c9818e3d574a9
+          - Producer CI run on R4 candidate: 36494063230
+          - Producer CI result: SUCCESS
+          - Producer test count: 53
+          - Hardened candidate deployed: NO
+          - Render changed: NO
+          - TikTok App Review Recall/Resubmit: NO
+          - Public auto-publish authorized: NO
+
+          Read-only Render observation before R4 package:
+          - TikTok service remains on tiktok-oauth-service
+          - plan observed: free
+          - no dedicated TikTok Postgres instance evidenced
+
+          Existing non-TikTok data stores are out of scope and are not authorized for reuse.
+
+          These statements must be independently verified if relied upon.
+          EOF
+
+          # Producer-side exact-target self-check only.
+          BUNDLE_ABS="$PWD/$PACKAGE/exact_target/TikTok-R4-Exact-Target-dd8e9bac.bundle"
+          SNAPSHOT_ABS="$PWD/$PACKAGE/exact_target/full-repository-snapshot.tar"
+          rm -rf producer_r4_bundle_verify producer_r4_bundle_clone producer_r4_snapshot
+          git init -q producer_r4_bundle_verify
+          git -C producer_r4_bundle_verify bundle verify "$BUNDLE_ABS"             > "$PACKAGE/producer_evidence/EXACT_TARGET_REPRODUCIBILITY_CHECK.txt" 2>&1
+          git clone -q "$BUNDLE_ABS" producer_r4_bundle_clone
+          {
+            echo "BUNDLE_HEAD=$(git -C producer_r4_bundle_clone rev-parse HEAD)"
+            echo "BUNDLE_TREE=$(git -C producer_r4_bundle_clone rev-parse 'HEAD^{tree}')"
+          } >> "$PACKAGE/producer_evidence/EXACT_TARGET_REPRODUCIBILITY_CHECK.txt"
+
+          mkdir -p producer_r4_snapshot
+          tar -xf "$SNAPSHOT_ABS" -C producer_r4_snapshot
+          git -C producer_r4_snapshot init -q
+          git -C producer_r4_snapshot config core.autocrlf false
+          git -C producer_r4_snapshot add -A
+          SNAPSHOT_TREE="$(git -C producer_r4_snapshot write-tree)"
+          echo "SNAPSHOT_TREE=$SNAPSHOT_TREE" >> "$PACKAGE/producer_evidence/EXACT_TARGET_REPRODUCIBILITY_CHECK.txt"
+
+          test "$(git -C producer_r4_bundle_clone rev-parse HEAD)" = "dd8e9bac48c8208f3f51bcc83b916db402050d42"
+          test "$(git -C producer_r4_bundle_clone rev-parse 'HEAD^{tree}')" = "3beafc241aa5e54f933b4ec4f2a49b8c424c2c2f"
+          test "$SNAPSHOT_TREE" = "3beafc241aa5e54f933b4ec4f2a49b8c424c2c2f"
+
+          (
+            cd "$PACKAGE"
+            find . -type f ! -name MANIFEST_SHA256.txt -print0 | sort -z | xargs -0 sha256sum > MANIFEST_SHA256.txt
+          )
+
+          zip -qr "$PACKAGE.zip" "$PACKAGE"
+          sha256sum "$PACKAGE.zip" > "$PACKAGE.zip.sha256"
+
+      - name: Upload R4 prequalification package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: TrendRadar-TikTok-Production-Prequalification-R4-20260929-dd8e9bac
+          path: |
+            TrendRadar-TikTok-Production-Prequalification-R4-20260929-dd8e9bac.zip
+            TrendRadar-TikTok-Production-Prequalification-R4-20260929-dd8e9bac.zip.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
