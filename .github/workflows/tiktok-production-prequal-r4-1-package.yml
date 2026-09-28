@@ -1,0 +1,166 @@
+name: TikTok R4.1 Focused Retest Package
+
+on:
+  push:
+    branches:
+      - tiktok-production-prequal-r4-remediation-20260929
+    paths:
+      - .github/workflows/tiktok-production-prequal-r4-1-package.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-r4-1-package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact frozen R4.1 candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: 168642cf54a25edf0949f2e61ede457a3ec19f18
+          path: candidate_repo
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout R4.1 handoff instructions
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: 63da8312994039732b48ee1c55db381d25e4d524
+          path: handoff_repo
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Build exact-target-bound R4.1 package
+        shell: bash
+        run: |
+          set -euo pipefail
+          PACKAGE="TrendRadar-TikTok-Production-Prequalification-R4.1-Retest-20260929-168642cf"
+          mkdir -p "$PACKAGE/exact_target" "$PACKAGE/candidate" "$PACKAGE/producer_evidence"
+
+          cd candidate_repo
+          ACTUAL_COMMIT="$(git rev-parse HEAD)"
+          ACTUAL_TREE="$(git rev-parse 'HEAD^{tree}')"
+          test "$ACTUAL_COMMIT" = "168642cf54a25edf0949f2e61ede457a3ec19f18"
+          test "$ACTUAL_TREE" = "7b5102b6e71fe788cd220db26bc3afb3c1097ce4"
+
+          git bundle create "../$PACKAGE/exact_target/TikTok-R4.1-Exact-Target-168642cf.bundle" HEAD
+          git archive --format=tar --output="../$PACKAGE/exact_target/full-repository-snapshot.tar" HEAD
+          git archive --format=tar HEAD | tar -x -C "../$PACKAGE/candidate"
+          git ls-tree -r --full-tree HEAD > "../$PACKAGE/exact_target/FULL_TREE_LS.txt"
+
+          python tools/generate_tiktok_sbom.py             --commit "$ACTUAL_COMMIT"             --output "../$PACKAGE/exact_target/TIKTOK_SBOM_R4_1.cdx.json"
+
+          {
+            echo "EXACT_COMMIT=$ACTUAL_COMMIT"
+            echo "EXACT_TREE=$ACTUAL_TREE"
+            git show --no-patch --format='COMMIT=%H%nTREE=%T%nPARENTS=%P%nAUTHOR_DATE=%aI%nCOMMITTER_DATE=%cI%nSUBJECT=%s' HEAD
+          } > "../$PACKAGE/exact_target/GIT_SHOW_COMMIT_TREE.txt"
+          cd ..
+
+          cp handoff_repo/review/tiktok/TIKTOK_INDEPENDENT_RETEST_REQUEST_R4_1_20260929.md "$PACKAGE/INDEPENDENT_REVIEW_README.md"
+          cp handoff_repo/review/tiktok/TIKTOK_REVIEWER_ACTIONS_R4_1_AR_20260929.md "$PACKAGE/REVIEWER_ACTIONS_AR.md"
+          cp handoff_repo/review/tiktok/TIKTOK_R4_INDEPENDENT_FINDING_RECORD_20260929.md "$PACKAGE/R4_INDEPENDENT_FINDING_RECORD.md"
+
+          cat > "$PACKAGE/EXACT_TARGET.txt" <<'EOF'
+          PROJECT=TrendHunter / Trend Radar
+          SCOPE=TikTok only
+          REPOSITORY=trendradarar-dotcom/trendradarar
+          FROZEN_REVIEW_BRANCH=tiktok-production-prequal-r4-retest-candidate-20260929-r4-1
+          EXACT_COMMIT=168642cf54a25edf0949f2e61ede457a3ec19f18
+          EXACT_TREE=7b5102b6e71fe788cd220db26bc3afb3c1097ce4
+          PREVIOUS_R4_FAILED_COMMIT=dd8e9bac48c8208f3f51bcc83b916db402050d42
+          BASE_ACCEPTED_R3_COMMIT=47be83f732e63ffc04362f19820c9818e3d574a9
+          TIKTOK_AUDIT_APPROVED=false/unset
+          PUBLIC_AUTO_PUBLISH=NOT_AUTHORIZED
+          CANDIDATE_DEPLOYED=false
+          EOF
+
+          cat > "$PACKAGE/START_HERE.md" <<'EOF'
+          # START HERE — TikTok R4.1 Focused Independent Retest
+
+          1. Verify MANIFEST_SHA256.txt.
+          2. Verify the Git bundle independently.
+          3. Recompute HEAD and HEAD^{tree}.
+          4. Rebuild the root tree from full-repository-snapshot.tar.
+          5. If Exact Target is not PASS, stop Fail-Closed.
+          6. Read INDEPENDENT_REVIEW_README.md.
+          7. Independently retest R4-02 watchdog and R4-03 documentation.
+          8. Run focused regressions only for affected/R3 safety controls.
+          9. Treat producer CI/tests as orientation, not independent closure evidence.
+          10. Do not deploy, merge, alter Render, create paid infrastructure, Recall/Resubmit TikTok App Review, or enable public posting.
+          11. Final production auto-publish remains NOT AUTHORIZED even if R4.1 passes locally.
+          EOF
+
+          cat > "$PACKAGE/producer_evidence/PRODUCER_EVIDENCE.md" <<'EOF'
+          # Producer evidence — NOT independent closure evidence
+
+          Previous independent R4 result:
+          - Exact Target = PASS
+          - R3 Regression = PASS
+          - R4-01 Recovery Qualification Tooling = PASS
+          - R4-02 Alert Watchdog Tooling = FAIL
+          - R4-03 Documentation Completeness = FAIL
+          - Architecture Pre-Review = FAIL
+          - Production/cold recovery gates = NOT VERIFIED
+
+          R4.1 producer remediation:
+          - watchdog now independently evaluates UNKNOWN/stale counts;
+          - every non-2xx response is degraded;
+          - incomplete/malformed health schema fails closed;
+          - invalid/negative counts fail closed;
+          - owner/gate/evidence documentation reconciled to R3 PASS + R4 FAIL;
+          - production gates remain NOT VERIFIED.
+
+          Producer-observed CI:
+          - run: 36497386037
+          - result: SUCCESS
+          - tests: 60/60 PASS
+          - adversarial watchdog cases include 404, 429, empty 429 JSON, incomplete 200 schema, invalid negative counts, source-suppressed UNKNOWN/stale.
+
+          These statements must be independently reproduced where material.
+          EOF
+
+          # Producer-side exact-target reproducibility self-check only.
+          BUNDLE_ABS="$PWD/$PACKAGE/exact_target/TikTok-R4.1-Exact-Target-168642cf.bundle"
+          SNAPSHOT_ABS="$PWD/$PACKAGE/exact_target/full-repository-snapshot.tar"
+          rm -rf producer_r41_bundle_verify producer_r41_bundle_clone producer_r41_snapshot
+          git init -q producer_r41_bundle_verify
+          git -C producer_r41_bundle_verify bundle verify "$BUNDLE_ABS"             > "$PACKAGE/producer_evidence/EXACT_TARGET_REPRODUCIBILITY_CHECK.txt" 2>&1
+          git clone -q "$BUNDLE_ABS" producer_r41_bundle_clone
+          {
+            echo "BUNDLE_HEAD=$(git -C producer_r41_bundle_clone rev-parse HEAD)"
+            echo "BUNDLE_TREE=$(git -C producer_r41_bundle_clone rev-parse 'HEAD^{tree}')"
+          } >> "$PACKAGE/producer_evidence/EXACT_TARGET_REPRODUCIBILITY_CHECK.txt"
+
+          mkdir -p producer_r41_snapshot
+          tar -xf "$SNAPSHOT_ABS" -C producer_r41_snapshot
+          git -C producer_r41_snapshot init -q
+          git -C producer_r41_snapshot config core.autocrlf false
+          git -C producer_r41_snapshot add -A
+          SNAPSHOT_TREE="$(git -C producer_r41_snapshot write-tree)"
+          echo "SNAPSHOT_TREE=$SNAPSHOT_TREE" >> "$PACKAGE/producer_evidence/EXACT_TARGET_REPRODUCIBILITY_CHECK.txt"
+
+          test "$(git -C producer_r41_bundle_clone rev-parse HEAD)" = "168642cf54a25edf0949f2e61ede457a3ec19f18"
+          test "$(git -C producer_r41_bundle_clone rev-parse 'HEAD^{tree}')" = "7b5102b6e71fe788cd220db26bc3afb3c1097ce4"
+          test "$SNAPSHOT_TREE" = "7b5102b6e71fe788cd220db26bc3afb3c1097ce4"
+
+          (
+            cd "$PACKAGE"
+            find . -type f ! -name MANIFEST_SHA256.txt -print0 | sort -z | xargs -0 sha256sum > MANIFEST_SHA256.txt
+          )
+
+          zip -qr "$PACKAGE.zip" "$PACKAGE"
+          sha256sum "$PACKAGE.zip" > "$PACKAGE.zip.sha256"
+
+      - name: Upload R4.1 focused retest package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: TrendRadar-TikTok-Production-Prequalification-R4.1-Retest-20260929-168642cf
+          path: |
+            TrendRadar-TikTok-Production-Prequalification-R4.1-Retest-20260929-168642cf.zip
+            TrendRadar-TikTok-Production-Prequalification-R4.1-Retest-20260929-168642cf.zip.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
