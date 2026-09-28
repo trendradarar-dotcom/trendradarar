@@ -1,6 +1,9 @@
 import base64
 import struct
+import io
 import unittest
+
+import av
 from pathlib import Path
 
 from media_validation import MediaValidationError, validate_mp4
@@ -58,6 +61,56 @@ class MediaValidationTests(unittest.TestCase):
         self.assertEqual(info["width"], 320)
         self.assertEqual(info["height"], 320)
         self.assertGreater(info["duration_sec"], 0)
+        self.assertGreaterEqual(info["decoded_frame_count"], 1)
+
+    def test_corruption_after_first_decodable_frame_fails_full_stream_validation(self):
+        adversarial = None
+        # Search a bounded tail window for a deterministic corruption that still lets
+        # a first-frame-only probe succeed but breaks a later frame. This proves the
+        # validator checks beyond the first frame.
+        start = max(0, len(self.valid_h264) - 768)
+        for offset in range(len(self.valid_h264) - 1, start - 1, -1):
+            mutated = bytearray(self.valid_h264)
+            mutated[offset] ^= 0xFF
+            candidate = bytes(mutated)
+            first_ok = False
+            full_failed = False
+            try:
+                c = av.open(io.BytesIO(candidate), mode="r", format="mp4")
+                try:
+                    stream = list(c.streams.video)[0]
+                    for frame in c.decode(video=stream.index):
+                        first_ok = bool(frame)
+                        break
+                finally:
+                    c.close()
+            except Exception:
+                first_ok = False
+            if not first_ok:
+                continue
+            try:
+                c = av.open(io.BytesIO(candidate), mode="r", format="mp4")
+                try:
+                    stream = list(c.streams.video)[0]
+                    frames = 0
+                    for _ in c.decode(video=stream.index):
+                        frames += 1
+                    # We need a later decode failure, not merely another valid file.
+                    full_failed = False
+                finally:
+                    c.close()
+            except Exception:
+                full_failed = True
+            if first_ok and full_failed:
+                adversarial = candidate
+                break
+
+        self.assertIsNotNone(
+            adversarial,
+            "could not construct a post-first-frame corruption from the fixture",
+        )
+        with self.assertRaises(MediaValidationError):
+            validate_mp4(adversarial, 100 * 1024 * 1024, max_duration_sec=60)
 
     def test_mislabeled_avc1_with_random_mdat_fails_closed(self):
         with self.assertRaises(MediaValidationError):
