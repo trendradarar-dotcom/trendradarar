@@ -12,6 +12,8 @@ on:
       - "instagram_oauth_gateway/**"
       - "tests/test_instagram_publisher.py"
       - "tests/test_instagram_gateway.py"
+      - "tests/test_instagram_postgres_integration.py"
+      - "tests/test_instagram_postgres_runtime.py"
       - ".github/workflows/instagram-publisher-ci.yml"
   workflow_dispatch:
 
@@ -67,5 +69,6 @@ jobs:
           python -m unittest -v tests.test_instagram_publisher
           python -m unittest -v tests.test_instagram_gateway
           python -m unittest -v tests.test_instagram_postgres_integration
+          python -m unittest -v tests.test_instagram_postgres_runtime
       - name: Record resolved dependency set
         run: python -m pip freeze --all
