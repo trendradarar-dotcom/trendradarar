@@ -369,10 +369,10 @@ class DurableStateStore:
                     conn.commit()
                     return {"created": False, "retry_admitted": False, "row": existing}
 
-                placeholders = ",".join(["?"] * len(self.ACTIVE_STATES))
                 cur.execute(
                     self._sql(
-                        f"SELECT COUNT(*) AS c FROM snapchat_publications WHERE profile_id=? AND state IN ({placeholders})"
+                        "SELECT COUNT(*) AS c FROM snapchat_publications "
+                        "WHERE profile_id=? AND state IN (?,?,?,?,?)"
                     ),
                     (profile_id, *self.ACTIVE_STATES),
                 )
@@ -448,39 +448,68 @@ class DurableStateStore:
         allowed = tuple(allowed_from)
         if not allowed:
             raise StateStoreError("transition_requires_allowed_from")
-        placeholders = ",".join(["?"] * len(allowed))
-        assignments = ["state=?", "updated_at=?"]
-        params = [new_state, now]
-        if remote_media_id is not None:
-            assignments.append("remote_media_id=?")
-            params.append(remote_media_id)
-        if remote_spotlight_id is not None:
-            assignments.append("remote_spotlight_id=?")
-            params.append(remote_spotlight_id)
-        if last_error is not None:
-            assignments.append("last_error=?")
-            params.append(last_error[:500])
-        if mark_submit_started:
-            assignments.append("submit_started_at=?")
-            params.append(now)
-        if mark_final:
-            assignments.append("final_at=?")
-            params.append(now)
-        params.extend([profile_id, publication_id, *allowed])
+
         self.init_schema()
-        with self._connect() as conn:
-            cur = conn.cursor()
-            cur.execute(
-                self._sql(
-                    f"UPDATE snapchat_publications SET {', '.join(assignments)} "
-                    f"WHERE profile_id=? AND publication_id=? AND state IN ({placeholders})"
-                ),
-                tuple(params),
-            )
-            if cur.rowcount != 1:
-                conn.rollback()
-                raise StateStoreError("invalid_publication_state_transition")
-            conn.commit()
+        lock = self._sqlite_lock if self.is_sqlite else _NullLock()
+        with lock:
+            with self._connect() as conn:
+                cur = conn.cursor()
+                if self.is_postgres:
+                    cur.execute(
+                        self._sql(
+                            "SELECT * FROM snapchat_publications "
+                            "WHERE profile_id=? AND publication_id=? FOR UPDATE"
+                        ),
+                        (profile_id, publication_id),
+                    )
+                else:
+                    cur.execute(
+                        self._sql(
+                            "SELECT * FROM snapchat_publications "
+                            "WHERE profile_id=? AND publication_id=?"
+                        ),
+                        (profile_id, publication_id),
+                    )
+                current = self._dict(cur.fetchone())
+                if not current or current["state"] not in allowed:
+                    conn.rollback()
+                    raise StateStoreError("invalid_publication_state_transition")
+
+                current_state = current["state"]
+                cur.execute(
+                    self._sql(
+                        """
+                        UPDATE snapchat_publications
+                        SET state=?,
+                            updated_at=?,
+                            remote_media_id=COALESCE(?, remote_media_id),
+                            remote_spotlight_id=COALESCE(?, remote_spotlight_id),
+                            last_error=COALESCE(?, last_error),
+                            submit_started_at=CASE WHEN ?=1 THEN ? ELSE submit_started_at END,
+                            final_at=CASE WHEN ?=1 THEN ? ELSE final_at END
+                        WHERE profile_id=? AND publication_id=? AND state=?
+                        """
+                    ),
+                    (
+                        new_state,
+                        now,
+                        remote_media_id,
+                        remote_spotlight_id,
+                        last_error[:500] if last_error is not None else None,
+                        1 if mark_submit_started else 0,
+                        now,
+                        1 if mark_final else 0,
+                        now,
+                        profile_id,
+                        publication_id,
+                        current_state,
+                    ),
+                )
+                if cur.rowcount != 1:
+                    conn.rollback()
+                    raise StateStoreError("concurrent_publication_state_change")
+                conn.commit()
+
         row = self.get_publication(profile_id, publication_id)
         if not row:
             raise StateStoreError("publication_missing_after_transition")
