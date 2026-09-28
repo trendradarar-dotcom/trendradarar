@@ -338,6 +338,36 @@ class PublisherContractTests(unittest.TestCase):
         self.assertEqual(result["status"], "HOLD_CIRCUIT_OPEN")
         self.assertEqual(result["last_error_code"], "UNRESOLVED_PUBLICATION_AMBIGUITY")
 
+    def test_machine_publisher_rejects_retargeted_identity(self):
+        runtime = PublisherRuntime(
+            db_connect=lambda: None,
+            load_token_record=lambda: None,
+            graph=lambda *a, **k: (500, {}),
+            expected_username="anotheraccount",
+            expected_professional_user_id="999999999",
+            publish_secret="secret",
+            public_publish_authorized=False,
+            publish_enabled=False,
+            media_host_allowlist=["media.trendradar.com.co"],
+            allowed_markets=["SA"],
+            allowed_languages=["ar"],
+        )
+        self.assertFalse(runtime.configured())
+        _, error = runtime._credential_gate()
+        self.assertEqual(error, "GOVERNED_ACCOUNT_BINDING_INVALID")
+
+    def test_container_create_requested_after_restart_becomes_unknown_without_retry(self):
+        runtime = self.make_runtime(public=True, enabled=True)
+        intent = runtime.validate_intent(valid_intent())
+        runtime._insert_job(intent, "CONTAINER_CREATE_REQUESTED")
+        status, result = runtime.reconcile(intent["idempotency_key"])
+        self.assertEqual(status, 409)
+        self.assertEqual(result["status"], "UNKNOWN")
+        self.assertEqual(
+            result["last_error_code"],
+            "CREATE_CONTAINER_OUTCOME_AMBIGUOUS_AFTER_RESTART",
+        )
+
     def test_exact_professional_user_id_is_required(self):
         runtime = PublisherRuntime(
             db_connect=lambda: None,
@@ -458,6 +488,22 @@ class FlaskBoundaryTests(unittest.TestCase):
         response = self.client.post("/api/reel", data={"consent": "true"})
         self.assertEqual(response.status_code, 423)
         self.assertEqual(response.get_json()["error"], "INSTAGRAM_MUTATIONS_DISABLED")
+
+    def test_all_backend_oauth_linking_routes_are_hard_disabled(self):
+        checks = (
+            ("get", "/auth/instagram/start"),
+            ("get", "/auth/instagram/callback"),
+            ("get", "/api/public-oauth/start"),
+            ("post", "/api/public-oauth/callback"),
+        )
+        for method, path in checks:
+            with self.subTest(path=path):
+                response = getattr(self.client, method)(path)
+                self.assertEqual(response.status_code, 423)
+                self.assertEqual(
+                    response.get_json()["error"],
+                    "OAUTH_RELINK_DISABLED_FAIL_CLOSED",
+                )
 
     def test_health_keeps_public_publish_closed(self):
         response = self.client.get("/health")
