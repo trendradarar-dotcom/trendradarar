@@ -66,12 +66,15 @@ class PublisherRuntime:
         self.db_connect = db_connect
         self.load_token_record = load_token_record
         self.graph = graph
-        self.expected_username = (expected_username or "").strip().lstrip("@").lower()
-        self.expected_professional_user_id = str(expected_professional_user_id or "").strip()
+        supplied_username = (expected_username or "").strip().lstrip("@").lower()
+        supplied_professional_user_id = str(expected_professional_user_id or "").strip()
         self.governed_account_binding_valid = (
-            self.expected_username == GOVERNED_USERNAME
-            and self.expected_professional_user_id == GOVERNED_PROFESSIONAL_USER_ID
+            supplied_username == GOVERNED_USERNAME
+            and supplied_professional_user_id == GOVERNED_PROFESSIONAL_USER_ID
         )
+        # The runtime can never be retargeted by caller/environment input.
+        self.expected_username = GOVERNED_USERNAME
+        self.expected_professional_user_id = GOVERNED_PROFESSIONAL_USER_ID
         self.publish_secret = publish_secret or ""
         self.public_publish_authorized = bool(public_publish_authorized)
         self.publish_enabled = bool(publish_enabled)
@@ -497,6 +500,8 @@ class PublisherRuntime:
                     + " WHERE idempotency_key = %s",
                     tuple(values),
                 )
+                if cur.rowcount != 1:
+                    raise RuntimeError("PUBLICATION_JOB_NOT_FOUND_DURING_TRANSITION")
                 cur.execute(
                     "INSERT INTO instagram_publication_events"
                     "(idempotency_key,event_type,safe_detail) "
@@ -574,25 +579,30 @@ class PublisherRuntime:
 
     def _unresolved_ambiguity_exists(self, exclude_key=None):
         self._ensure_tables()
+        statuses = (
+            "UNKNOWN",
+            "PUBLISHED_UNVERIFIED",
+            "PUBLISH_REQUESTED",
+            "CONTAINER_CREATE_REQUESTED",
+        )
         with self.db_connect() as conn:
             with conn.cursor() as cur:
                 if exclude_key:
                     cur.execute(
-                        "SELECT COUNT(*) FROM instagram_publication_jobs "
-                        "WHERE status IN (
-                        'UNKNOWN','PUBLISHED_UNVERIFIED','PUBLISH_REQUESTED',
-                        'CONTAINER_CREATE_REQUESTED'
-                    ) "
-                        "AND idempotency_key <> %s",
-                        (exclude_key,),
+                        """
+                        SELECT COUNT(*) FROM instagram_publication_jobs
+                        WHERE status = ANY(%s)
+                          AND idempotency_key <> %s
+                        """,
+                        (list(statuses), exclude_key),
                     )
                 else:
                     cur.execute(
-                        "SELECT COUNT(*) FROM instagram_publication_jobs "
-                        "WHERE status IN (
-                        'UNKNOWN','PUBLISHED_UNVERIFIED','PUBLISH_REQUESTED',
-                        'CONTAINER_CREATE_REQUESTED'
-                    )"
+                        """
+                        SELECT COUNT(*) FROM instagram_publication_jobs
+                        WHERE status = ANY(%s)
+                        """,
+                        (list(statuses),),
                     )
                 return int(cur.fetchone()[0]) > 0
 
