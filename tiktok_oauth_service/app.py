@@ -48,11 +48,41 @@ def durable_ready():
 def cfg(name):
     return str(os.environ.get(name,"")).strip()
 
+def cfg_int(name, default):
+    raw=cfg(name)
+    if not raw:
+        return int(default)
+    try:
+        value=int(raw)
+    except Exception:
+        return int(default)
+    return value if value>0 else int(default)
+
+def flag(name):
+    return cfg(name).lower() in ("1","true","yes","on")
+
+def kill_switch_active():
+    return flag("TIKTOK_KILL_SWITCH") or not flag("TIKTOK_MUTATIONS_ENABLED")
+
+def mutations_allowed():
+    return not kill_switch_active()
+
+def publication_limits():
+    return {
+        "per_hour":cfg_int("TIKTOK_MAX_MUTATIONS_PER_HOUR",6),
+        "per_day":cfg_int("TIKTOK_MAX_MUTATIONS_PER_DAY",24),
+        "active_per_account":cfg_int("TIKTOK_MAX_ACTIVE_MUTATIONS_PER_ACCOUNT",1),
+        "active_global":cfg_int("TIKTOK_MAX_ACTIVE_MUTATIONS_GLOBAL",2),
+    }
+
+MAX_AUTOMATED_RETRIES=0
+MAX_RETRY_HORIZON_SECONDS=0
+
 def configured():
     return all((cfg("TIKTOK_CLIENT_KEY"),cfg("TIKTOK_CLIENT_SECRET"),cfg("TIKTOK_REDIRECT_URI")))
 
 def audit_approved():
-    return cfg("TIKTOK_AUDIT_APPROVED").lower() in ("1","true","yes","on")
+    return flag("TIKTOK_AUDIT_APPROVED")
 
 def fingerprint(v):
     return hashlib.sha256(v.encode()).hexdigest() if v else ""
@@ -253,6 +283,11 @@ class Handler(BaseHTTPRequestHandler):
                 "durable_state_ready":durable_ready(),
                 "ui":"creator_facing_v3",
                 "audit_approved":audit_approved(),
+                "mutations_allowed":mutations_allowed(),
+                "kill_switch_active":kill_switch_active(),
+                "hard_limits":publication_limits(),
+                "max_automated_retries":MAX_AUTOMATED_RETRIES,
+                "max_retry_horizon_seconds":MAX_RETRY_HORIZON_SECONDS,
                 "scopes":cfg("TIKTOK_SCOPES") or DEFAULT_SCOPES,
             })
 
@@ -323,6 +358,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         p=urllib.parse.urlsplit(self.path)
+        if p.path in ("/api/post","/api/private-test","/api/upload-draft") and not mutations_allowed():
+            return self.js(423,{"error":"tiktok_mutations_disabled","kill_switch_active":True})
         if p.path=="/api/post":
             return self.post_video(p)
         if p.path=="/api/private-test":
@@ -748,7 +785,16 @@ async function poll(id,s){{
                     "state":record.get("state"),
                     "publish_id":record.get("provider_publish_id"),
                 })
-            store.transition_publication(idem,"VALIDATED")
+            limits=publication_limits()
+            admitted,limit_reason=store.admit_publication(
+                idem,
+                limits["per_hour"],
+                limits["per_day"],
+                limits["active_per_account"],
+                limits["active_global"],
+            )
+            if not admitted:
+                return self.js(429,{"error":"hard_limit_blocked","reason":limit_reason})
             store.transition_publication(idem,"SAFETY_APPROVED")
             store.begin_publication_attempt(idem)
             store.transition_publication(idem,"PUBLISH_REQUESTED")
@@ -895,7 +941,16 @@ async function poll(id,s){{
                     "state":record.get("state"),
                     "publish_id":record.get("provider_publish_id"),
                 })
-            store.transition_publication(idem,"VALIDATED")
+            limits=publication_limits()
+            admitted,limit_reason=store.admit_publication(
+                idem,
+                limits["per_hour"],
+                limits["per_day"],
+                limits["active_per_account"],
+                limits["active_global"],
+            )
+            if not admitted:
+                return self.js(429,{"error":"hard_limit_blocked","reason":limit_reason})
             store.transition_publication(idem,"SAFETY_APPROVED")
             store.begin_publication_attempt(idem)
             store.transition_publication(idem,"PUBLISH_REQUESTED")
