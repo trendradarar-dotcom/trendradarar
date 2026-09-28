@@ -1,83 +1,100 @@
 # TikTok Security / Reliability / Recoverability — Evidence Matrix
 
-Date: 2026-09-28
+Updated: 2026-09-29
 Scope: TikTok only
-Verified pre-remediation live target: `a421e755c31bf8e00a2cffc047db2c7d9e70bcbe`
-Current remediation branch: `tiktok-runtime-reliability-remediation-20260928`
-Matrix snapshot head: current remediation branch; exact candidate freeze follows after CI closure
+
+## Independent closure anchors
+
+R3 exact target independently verified:
+- commit: `47be83f732e63ffc04362f19820c9818e3d574a9`
+- tree: `cf4f045ed253318726ec0aad4b88f7cdac358998`
+
+Independent R3 result:
+- F-01 OAuth browser/session binding = PASS / CLOSED
+- F-02 429 reconciliation = PASS
+- F-03 draft terminal consistency = PASS
+- F-04 full H.264 validation = PASS / CLOSED
+- F-05 supply-chain hardening = PASS
+- R3 Independent Adversarial Retest = PASS
+
+R3 did NOT authorize production auto-publish.
 
 Status vocabulary:
-- INTERNAL PASS — implemented and covered by exact-branch automated evidence, but not a substitute for required independent verification.
-- PARTIAL — meaningful evidence exists but at least one required production/independent/live condition remains open.
-- NOT VERIFIED — required evidence is not yet available.
+- INDEPENDENT PASS — independently reproduced on the exact reviewed candidate.
+- INTERNAL PASS — producer implementation/tests pass but do not replace required independent verification.
+- PARTIAL — substantial evidence exists but one or more production/live/independent conditions remain.
+- NOT VERIFIED — required evidence remains unavailable.
 - N/A — not applicable to the actual design.
 
 ## 47-item acceptance matrix
 
-| # | Requirement | Current status | Exact evidence / remaining gap |
+| # | Requirement | Status | Evidence / remaining gap |
 |---|---|---|---|
-| 1 | Exact Target | INTERNAL PASS | Render verified the live TikTok service branch and live commit as `tiktok-oauth-service@a421...`; remediation was rebased from that exact runtime. |
-| 2 | Independent Code Review | NOT VERIFIED | Current remediation and tests were produced/reviewed by the same remediation agent. Independent reviewer still required. |
-| 3 | Independent Architecture Review | NOT VERIFIED | Architecture is documented; independent architecture verdict still required. |
-| 4 | TikTok Account Binding | PARTIAL | OAuth `open_id` is persisted, refresh rejects `open_id` drift, publication ledger is account-hash bound, reconciliation rejects account mismatch. Independent/live adversarial confirmation remains. |
-| 5 | OAuth Security | PARTIAL | Durable one-time state, expiry, encrypted server-side tokens, refresh, revoke, fail-closed tests. Full independent OAuth attack review remains. |
-| 6 | Scope Verification | PARTIAL | Direct Post requires `video.publish`; draft requires `video.upload`; missing-scope test passes. Current already-submitted TikTok review configuration is intentionally untouched while In review. |
-| 7 | Least Privilege | PARTIAL | Remediation default removes unproven `user.info.basic`; portal/live scope minimization is deferred until review-safe admission. |
-| 8 | Internal Authorization | PARTIAL | Session + CSRF + explicit consent + mutation-enable + kill-switch + safety/hard-limit gates exist. Independent direct-backend/forged-request testing remains. |
-| 9 | Token / Secret Security | PARTIAL | Durable session is encrypted, identifiers hashed, secret-like audit details rejected. 19 TikTok-service historical commits were scanned for obvious literal TikTok token/client-secret assignments with no findings. Full independent secret/supply-chain scan remains. |
-| 10 | Disconnect Behavior | INTERNAL PASS | Revocation path + durable local session removal + test evidence. Live provider disconnect test is deferred to a controlled authorized phase. |
-| 11 | Upload Path | PARTIAL | Existing provider demo proved draft upload; hardened path is internally validated but deliberately not deployed during App Review. |
-| 12 | Direct Post Path | PARTIAL | Existing provider demo proved SELF_ONLY Direct Post/PUBLISH_COMPLETE; hardened branch is not deployed. |
-| 13 | Direct Post Safety Gate | PARTIAL | Validation, account/scope gate, audit/public gate, idempotency and hard-limit admission precede provider mutation. Independent bypass testing remains. |
-| 14 | Idempotency | INTERNAL PASS | Durable primary-key publication intent derived from account + operation + source-content hash; duplicate intent returns existing record. |
-| 15 | Duplicate Upload Prevention | INTERNAL PASS | Duplicate content intent for same account/operation is blocked before provider mutation. |
-| 16 | Duplicate Publish Prevention | INTERNAL PASS | Same durable idempotency barrier; UNKNOWN records cannot transition back to upload-started. |
-| 17 | Persistent Publication State | PARTIAL | SQLite durable ledger + restart/restore tests pass. Production-persistent Render volume/database is not yet evidenced. |
-| 18 | Retry Policy | INTERNAL PASS | Automated mutation retries = 0; retry horizon = 0. Ambiguous outcomes require reconciliation rather than blind retry. |
-| 19 | Timeout Handling | PARTIAL | Provider/network ambiguity maps to UNKNOWN. Broader live timeout matrix remains for independent retest. |
-| 20 | Fail-Closed | PARTIAL | Missing durable state, missing scope, account mismatch, kill switch, malformed/ambiguous provider outcomes fail closed in covered paths. Independent negative matrix remains. |
-| 21 | Unknown-State Handling | INTERNAL PASS | UNKNOWN is durable, survives restart, is not PUBLISHED and cannot restart upload by state transition. |
-| 22 | Negative / Adversarial Tests | PARTIAL | Scope, token refresh, account mismatch, tamper, duplicate, provider 5xx, restore/restart and kill-switch tests exist. Full requested matrix remains. |
-| 23 | Race / Concurrency Tests | INTERNAL PASS | Threaded atomicity tests prove a single creator for the same idempotency key and a single per-account admission under a concurrent two-intent race. Independent stress/review still required for final acceptance. |
-| 24 | Media Validation | INTERNAL PASS | Hardened admission now parses ISO-BMFF structure fail-closed, requires complete MP4 structure, H.264 sample entry, bounded dimensions/aspect ratio/size and creator duration limit. Truncated/malformed/oversize tests pass; the legacy private diagnostic sample was exposed as structurally truncated and the legacy mutation diagnostic was disabled rather than weakening validation. |
-| 25 | SSRF Controls | N/A | TikTok mutation paths accept uploaded video bytes; they do not fetch user-supplied media URLs. Reassess if URL ingestion is added. |
-| 26 | Metadata Integrity | PARTIAL | Caption length, privacy, creator interaction restrictions and operation-bound metadata hash are present. Broader malformed/encoding/injection tests remain. |
-| 27 | Rate-Limit Handling | PARTIAL | Conservative internal hard limits and zero automatic retries reduce storm risk. Live TikTok 429 behavior still requires controlled evidence. |
-| 28 | Hard Limits | INTERNAL PASS | Per-account/hour/day, global/hour/day and active-account/global limits are enforced transactionally. |
-| 29 | Maximum Blast Radius | INTERNAL PASS | Defaults: 6/account/hour, 24/account/day, 12/global/hour, 48/global/day, 1 active/account, 2 active/global, duplicate publish=0. |
-| 30 | Monitoring | PARTIAL | Secret-free `/ops/health` now reports durable-state readiness, UNKNOWN count, stale non-terminal count, active count, kill-switch state and mutation enablement; durable health tests flag UNKNOWN/stale work. External production monitor/notification routing is not yet configured or evidenced. |
-| 31 | Audit Trail | INTERNAL PASS | Durable publication/admission/state/control audit events; secret field names are rejected from audit details. |
-| 32 | Kill Switch | INTERNAL PASS | Mutations are disabled by default; explicit kill switch blocks Direct Post and draft upload with HTTP 423. The legacy private mutation diagnostic is separately disabled with HTTP 410. |
-| 33 | Read-Only / No-Publish Mode | INTERNAL PASS | Default runtime posture blocks mutations while health/status/reconciliation paths remain available. |
-| 34 | Secret Rotation / Revocation | PARTIAL | Token refresh rotation, TikTok revoke flow and MultiFernet key rotation support/tests exist. Operational owner rotation drill remains. |
-| 35 | Restart / Crash Recovery | PARTIAL | PROCESSING/UNKNOWN persistence and backup/restore tests pass. Full crash-at-each-side-effect fault-injection matrix remains. |
-| 36 | Remote/Local Reconciliation | INTERNAL PASS | Provider status updates DIRECT_POST to PUBLISHED, draft to READY, 5xx to UNKNOWN; account mismatch blocks provider query. |
-| 37 | Backup / Restore | PARTIAL | Verified SQLite backup/quick-check/restore implementation and tests. Production backup destination/state persistence not yet proven. |
-| 38 | Restore Does Not Duplicate Publishing | INTERNAL PASS | Restored PUBLISHED intent remains duplicate-blocking; UNKNOWN intent remains non-republishable. |
-| 39 | Supply Chain Review | PARTIAL | Direct and transitive Python dependencies (`cryptography`, `cffi`, `pycparser`) are version-pinned; GitHub Actions are pinned by immutable commit SHA. Full hash-locked dependency set/SBOM/independent review remains. |
-| 40 | Golden Recovery Baseline | NOT VERIFIED | Golden Release is intentionally NOT frozen before independent retest and production persistence evidence. |
-| 41 | Recovery Runbook | PARTIAL | Repository runbook exists. A controlled independent recovery drill is still required. |
-| 42 | Owner Recovery Package | INTERNAL PASS | Owner package records source, architecture, trust boundaries, env names, state schema, build/run, revoke, backup/restore and rebuild flow. |
-| 43 | Rebuild From Trusted Source | PARTIAL | Procedure is documented; clean-room rebuild execution is not yet independently proven. |
-| 44 | Human Takeover | PARTIAL | Handover material exists; takeover by a new engineer has not yet been observed. |
-| 45 | Cold Engineer Handover | NOT VERIFIED | Must be executed by a person/agent independent of development using only repository package/runbooks. |
-| 46 | All Blocking Findings Closed | NOT VERIFIED | Production-persistent state/backup infrastructure, external monitoring/alert routing, independent pen/code/architecture review, cold handover and remaining live fault-injection/provider probes are open. |
-| 47 | No Critical NOT VERIFIED | NOT VERIFIED | Independent verification and production-recovery evidence are intentionally still open. |
+| 1 | Exact Target | INDEPENDENT PASS | R3 commit/tree and full snapshot reconstruction independently matched. |
+| 2 | Independent Code Review | PARTIAL | Independent review/retests covered the TikTok implementation and findings, but final post-production-admission candidate review is still required. |
+| 3 | Independent Architecture Review | NOT VERIFIED | Final architecture verdict must include the actual production state/backup/alert failure domains. |
+| 4 | TikTok Account Binding | INDEPENDENT PASS | R3 two-session adversarial OAuth test proved no state/session/account cross-binding. |
+| 5 | OAuth Security | INDEPENDENT PASS | One-time state/replay, browser binding, scope/refresh/open_id regressions independently exercised in the reviewed scope. |
+| 6 | Scope Verification | INDEPENDENT PASS | Missing-scope fail-closed regression passed; Direct Post/draft scope separation retained. |
+| 7 | Least Privilege | PARTIAL | Code defaults are minimized; production portal/deployed exact-scope admission remains a production-bound check. |
+| 8 | Internal Authorization | PARTIAL | Session/CSRF/consent/mutation/kill-switch gates exist; final deployed-target bypass review remains. |
+| 9 | Token / Secret Security | PARTIAL | Encrypted state, hashed identifiers, secret exclusions and prior history scanning exist; final deployed-secret operational review remains. |
+| 10 | Disconnect Behavior | INTERNAL PASS | Revoke + durable local session removal are covered; production/live provider drill remains controlled. |
+| 11 | Upload Path | PARTIAL | Historical provider draft upload worked; hardened exact target is not production deployed. |
+| 12 | Direct Post Path | PARTIAL | Historical SELF_ONLY Direct Post worked; hardened exact target is not production deployed. |
+| 13 | Direct Post Safety Gate | PARTIAL | Media/account/scope/idempotency/hard-limit gates precede provider mutation; final deployed-target review remains. |
+| 14 | Idempotency | INDEPENDENT PASS | Duplicate/idempotency regressions independently passed. |
+| 15 | Duplicate Upload Prevention | INDEPENDENT PASS | Independently reproduced duplicate suppression. |
+| 16 | Duplicate Publish Prevention | INDEPENDENT PASS | Independently reproduced duplicate barrier/UNKNOWN safety semantics. |
+| 17 | Persistent Publication State | PARTIAL | Local durability/restart/restore behavior is proven; production-persistent backend/volume is NOT VERIFIED. |
+| 18 | Retry Policy | INDEPENDENT PASS | Zero blind mutation retry policy and reconciliation behavior independently regressed. |
+| 19 | Timeout Handling | PARTIAL | UNKNOWN semantics are proven for ambiguous outcomes; final production/provider fault matrix remains. |
+| 20 | Fail-Closed | INDEPENDENT PASS | OAuth/session/media/scope/kill-switch and ambiguity gates have independent adversarial/regression evidence. |
+| 21 | Unknown-State Handling | INDEPENDENT PASS | UNKNOWN semantics and health signal regressions independently passed. |
+| 22 | Negative / Adversarial Tests | INDEPENDENT PASS | R3 completed two-session OAuth and adversarial media corpus required for the outstanding findings. |
+| 23 | Race / Concurrency Tests | INTERNAL PASS | Atomic duplicate/admission race tests pass; independent large-stress race evidence is not a current production blocker unless final reviewer requires it. |
+| 24 | Media Validation | INDEPENDENT PASS | R3 adversarial corpus proved full-stream H.264 validation and zero provider mutation for rejected media. |
+| 25 | SSRF Controls | N/A | Mutation path does not fetch user media URLs. |
+| 26 | Metadata Integrity | PARTIAL | Existing validation exists; final deployed-target malformed metadata regression remains advisable. |
+| 27 | Rate-Limit Handling | INDEPENDENT PASS | 429 -> UNKNOWN -> later terminal success independently reproduced. |
+| 28 | Hard Limits | INTERNAL PASS | Durable transactional account/global limits remain implemented. |
+| 29 | Maximum Blast Radius | INTERNAL PASS | Conservative per-account/global limits and active-operation caps remain configured in code. |
+| 30 | Monitoring | PARTIAL | `/ops/health` is independently proven to flag UNKNOWN/stale; signed external watchdog is prepared but external delivery is NOT VERIFIED. |
+| 31 | Audit Trail | PARTIAL | Durable audit and secret-field rejection exist; final production retention/availability still depends on persistent state. |
+| 32 | Kill Switch | INDEPENDENT PASS | Kill-switch regression independently passed. |
+| 33 | Read-Only / No-Publish Mode | PARTIAL | Fail-closed posture is implemented; production admission must prove deployed startup/no-publish behavior. |
+| 34 | Secret Rotation / Revocation | PARTIAL | Token/key rotation mechanisms exist; owner operational drill remains. |
+| 35 | Restart / Crash Recovery | PARTIAL | Local restart/backup/UNKNOWN behavior works; production-bound restart/replacement drill is NOT VERIFIED. |
+| 36 | Remote/Local Reconciliation | INDEPENDENT PASS | 429/UNKNOWN/later completion and draft terminal mappings independently reproduced. |
+| 37 | Backup / Restore | PARTIAL | Local integrity-checked backup/restore works; off-instance production destination and production restore drill are NOT VERIFIED. |
+| 38 | Restore Does Not Duplicate Publishing | INDEPENDENT PASS | Backup/restore duplicate barrier regression independently passed. |
+| 39 | Supply Chain Review | INDEPENDENT PASS | R3 independently verified immutable Action SHAs, hash-locked dependencies and exact-commit SBOM binding. |
+| 40 | Golden Recovery Baseline | NOT VERIFIED | R3 is independently accepted for its review scope but is not yet the final production Golden Release. |
+| 41 | Recovery Runbook | PARTIAL | Runbook exists; production-bound independent recovery drill remains. |
+| 42 | Owner Recovery Package | INTERNAL PASS | Owner package is documented and updated with production qualification tooling. |
+| 43 | Rebuild From Trusted Source | PARTIAL | Procedure/tooling exists; cold independent rebuild has not yet been completed. |
+| 44 | Human Takeover | PARTIAL | Takeover procedure exists; independent execution remains. |
+| 45 | Cold Engineer Handover | NOT VERIFIED | Must be executed independently using source/docs/runbooks only. |
+| 46 | All Blocking Findings Closed | NOT VERIFIED | R3 code findings are closed; production persistence, backup/restore, alert delivery, cold takeover and final architecture acceptance remain open. |
+| 47 | No Critical NOT VERIFIED | NOT VERIFIED | Production recovery and ownership gates remain NOT VERIFIED. |
 
 ## Current verdict
 
-`SECURITY, RELIABILITY & RECOVERABILITY ACCEPTANCE — PASS` = **FORBIDDEN AT THIS STAGE**
+`R3 INDEPENDENT ADVERSARIAL RETEST = PASS`
 
-Reason:
-- implementation/remediation evidence is materially stronger;
-- but the requested gate explicitly requires independent verification and production recovery evidence;
-- the hardened branch is deliberately not deployed while the TikTok Developer App Review remains In review.
+but:
+
+`FINAL PRODUCTION AUTO-PUBLISH ACCEPTANCE = NOT VERIFIED / NOT AUTHORIZED`
 
 ## Next admissible sequence
 
-1. close remaining internal testable gaps without touching the pending TikTok App Review;
-2. freeze one exact remediation candidate;
-3. produce independent-review handoff;
-4. independent adversarial/security/recovery retest;
-5. only after that, separately authorize a controlled production-persistence admission/deployment;
-6. never infer public posting authority from generic App Review status.
+1. prepare production qualification tooling without touching live production;
+2. independently review the post-R3 production-admission candidate;
+3. obtain explicit owner authorization before any paid persistent infrastructure or deployment;
+4. deploy only in NO-PUBLISH / kill-switch posture;
+5. prove production persistence across restart/replacement;
+6. prove off-instance backup + isolated restore + duplicate barrier;
+7. prove external alert delivery;
+8. complete cold-engineer handover/recovery;
+9. perform final independent architecture/security acceptance on the exact deployed target;
+10. only then reconsider public auto-publish authorization.
