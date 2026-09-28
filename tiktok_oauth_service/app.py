@@ -456,7 +456,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.status_api(q)
 
         if p.path=="/private-test":
-            return self.private_test_page(q)
+            return self.js(410,{"error":"private_diagnostic_disabled"})
 
         if p.path=="/auth/tiktok/status":
             sid,sess=self.get_session()
@@ -473,7 +473,9 @@ class Handler(BaseHTTPRequestHandler):
         p=urllib.parse.urlsplit(self.path)
         if p.path=="/auth/tiktok/disconnect":
             return self.disconnect_tiktok()
-        if p.path in ("/api/post","/api/private-test","/api/upload-draft") and not mutations_allowed():
+        if p.path=="/api/private-test":
+            return self.js(410,{"error":"private_diagnostic_disabled"})
+        if p.path in ("/api/post","/api/upload-draft") and not mutations_allowed():
             record_security_event(
                 "MUTATION_BLOCKED","BLOCK",operation=p.path,
                 detail={"reason":"kill_switch_or_disabled"},
@@ -481,8 +483,6 @@ class Handler(BaseHTTPRequestHandler):
             return self.js(423,{"error":"tiktok_mutations_disabled","kill_switch_active":True})
         if p.path=="/api/post":
             return self.post_video(p)
-        if p.path=="/api/private-test":
-            return self.private_test_post()
         if p.path=="/api/upload-draft":
             return self.upload_draft(p)
         return self.js(404,{"error":"not_found"})
@@ -498,8 +498,7 @@ class Handler(BaseHTTPRequestHandler):
         csrf=secrets.token_urlsafe(24)
         now=int(time.time())
         state=secrets.token_urlsafe(32)
-        requested_next=q.get("next",["/share"])[0]
-        next_path="/private-test" if requested_next=="/private-test" else "/share"
+        next_path="/share"
         try:
             store.patch_session(sid,{"csrf":csrf},now=now,ttl=SESSION_TTL)
             store.create_oauth_state(state,sid,next_path,now=now,ttl=STATE_TTL)
