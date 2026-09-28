@@ -59,7 +59,7 @@ Status vocabulary:
 | 27 | Rate-Limit Handling | INDEPENDENT PASS | 429 -> UNKNOWN -> later terminal success independently reproduced. |
 | 28 | Hard Limits | INTERNAL PASS | Durable transactional account/global limits remain implemented. |
 | 29 | Maximum Blast Radius | INTERNAL PASS | Conservative per-account/global limits and active-operation caps remain configured in code. |
-| 30 | Monitoring | PARTIAL | `/ops/health` is independently proven to flag UNKNOWN/stale; signed external watchdog is prepared but external delivery is NOT VERIFIED. |
+| 30 | Monitoring | PARTIAL | `/ops/health` is independently proven to flag UNKNOWN/stale. R4 found a false-negative in the first external watchdog; post-R4 remediation now fail-closes on non-2xx, malformed schema, UNKNOWN>0 and stale>0, but independent retest and real external delivery remain NOT VERIFIED. |
 | 31 | Audit Trail | PARTIAL | Durable audit and secret-field rejection exist; final production retention/availability still depends on persistent state. |
 | 32 | Kill Switch | INDEPENDENT PASS | Kill-switch regression independently passed. |
 | 33 | Read-Only / No-Publish Mode | PARTIAL | Fail-closed posture is implemented; production admission must prove deployed startup/no-publish behavior. |
@@ -70,7 +70,7 @@ Status vocabulary:
 | 38 | Restore Does Not Duplicate Publishing | INDEPENDENT PASS | Backup/restore duplicate barrier regression independently passed. |
 | 39 | Supply Chain Review | INDEPENDENT PASS | R3 independently verified immutable Action SHAs, hash-locked dependencies and exact-commit SBOM binding. |
 | 40 | Golden Recovery Baseline | NOT VERIFIED | R3 is independently accepted for its review scope but is not yet the final production Golden Release. |
-| 41 | Recovery Runbook | PARTIAL | Runbook exists; production-bound independent recovery drill remains. |
+| 41 | Recovery Runbook | PARTIAL | Runbook exists; R4 documentation review found status inconsistencies which are corrected on the post-R4 remediation branch, pending independent retest; production-bound recovery drill remains. |
 | 42 | Owner Recovery Package | INTERNAL PASS | Owner package is documented and updated with production qualification tooling. |
 | 43 | Rebuild From Trusted Source | PARTIAL | Procedure/tooling exists; cold independent rebuild has not yet been completed. |
 | 44 | Human Takeover | PARTIAL | Takeover procedure exists; independent execution remains. |
@@ -82,7 +82,16 @@ Status vocabulary:
 
 `R3 INDEPENDENT ADVERSARIAL RETEST = PASS`
 
-but:
+Independent R4 pre-qualification:
+- Recovery Qualification Tooling = PASS
+- Alert Watchdog Tooling = FAIL
+- Documentation Completeness = FAIL
+- Architecture Pre-Review = FAIL
+- production/cold-recovery gates = NOT VERIFIED
+
+Post-R4 local remediation exists but is NOT independently closed yet.
+
+Therefore:
 
 `FINAL PRODUCTION AUTO-PUBLISH ACCEPTANCE = NOT VERIFIED / NOT AUTHORIZED`
 
