@@ -14,6 +14,27 @@ class DurableStateError(RuntimeError):
     pass
 
 
+PUBLICATION_STATES = {
+    "RECEIVED","VALIDATED","SAFETY_APPROVED","PUBLISH_REQUESTED",
+    "UPLOAD_STARTED","UPLOADED","PROCESSING","READY","PUBLISHED",
+    "FAILED","UNKNOWN",
+}
+
+_ALLOWED_PUBLICATION_TRANSITIONS = {
+    "RECEIVED": {"VALIDATED","FAILED"},
+    "VALIDATED": {"SAFETY_APPROVED","FAILED"},
+    "SAFETY_APPROVED": {"PUBLISH_REQUESTED","FAILED"},
+    "PUBLISH_REQUESTED": {"UPLOAD_STARTED","FAILED","UNKNOWN"},
+    "UPLOAD_STARTED": {"UPLOADED","FAILED","UNKNOWN"},
+    "UPLOADED": {"PROCESSING","FAILED","UNKNOWN"},
+    "PROCESSING": {"PROCESSING","READY","PUBLISHED","FAILED","UNKNOWN"},
+    "UNKNOWN": {"PROCESSING","READY","PUBLISHED","FAILED","UNKNOWN"},
+    "READY": {"READY"},
+    "PUBLISHED": {"PUBLISHED"},
+    "FAILED": {"FAILED"},
+}
+
+
 def _sha256(value):
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
@@ -97,9 +118,28 @@ class DurableState:
                     consumed_at INTEGER
                 )"""
             )
+            con.execute(
+                """CREATE TABLE IF NOT EXISTS publications(
+                    idempotency_key TEXT PRIMARY KEY,
+                    content_sha256 TEXT NOT NULL,
+                    account_hash TEXT NOT NULL,
+                    operation TEXT NOT NULL,
+                    metadata_sha256 TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    provider_publish_id TEXT UNIQUE,
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    first_attempt_at INTEGER,
+                    last_attempt_at INTEGER,
+                    last_error_code TEXT,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL
+                )"""
+            )
             con.execute("CREATE INDEX IF NOT EXISTS idx_oauth_states_exp ON oauth_states(expires_at)")
             con.execute("CREATE INDEX IF NOT EXISTS idx_sessions_exp ON sessions(expires_at)")
             con.execute("CREATE INDEX IF NOT EXISTS idx_handoffs_exp ON handoffs(expires_at)")
+            con.execute("CREATE INDEX IF NOT EXISTS idx_publications_provider ON publications(provider_publish_id)")
+            con.execute("CREATE INDEX IF NOT EXISTS idx_publications_account ON publications(account_hash,updated_at)")
 
     def _encrypt_json(self, payload):
         raw = json.dumps(payload, separators=(",", ":"), sort_keys=True, ensure_ascii=False).encode("utf-8")
@@ -263,6 +303,87 @@ class DurableState:
         except (InvalidToken, UnicodeDecodeError) as exc:
             raise DurableStateError("handoff session binding failed authentication") from exc
         return {"sid": sid, "ts": int(row["created_at"]), "next_path": str(row["next_path"])}
+
+    def create_publication_intent(self, idempotency_key, content_sha256, account_hash, operation, metadata_sha256, now=None):
+        if not all((idempotency_key, content_sha256, account_hash, operation, metadata_sha256)):
+            raise DurableStateError("publication intent fields are required")
+        now = int(time.time() if now is None else now)
+        with self._lock, closing(self._connect()) as con:
+            con.execute("BEGIN IMMEDIATE")
+            row = con.execute(
+                "SELECT * FROM publications WHERE idempotency_key=?",
+                (idempotency_key,),
+            ).fetchone()
+            if row:
+                con.execute("COMMIT")
+                return dict(row), False
+            con.execute(
+                """INSERT INTO publications(
+                    idempotency_key,content_sha256,account_hash,operation,metadata_sha256,
+                    state,created_at,updated_at
+                ) VALUES(?,?,?,?,?,?,?,?)""",
+                (idempotency_key,content_sha256,account_hash,operation,metadata_sha256,"RECEIVED",now,now),
+            )
+            row = con.execute("SELECT * FROM publications WHERE idempotency_key=?", (idempotency_key,)).fetchone()
+            con.execute("COMMIT")
+            return dict(row), True
+
+    def get_publication(self, idempotency_key):
+        with self._lock, closing(self._connect()) as con:
+            row = con.execute("SELECT * FROM publications WHERE idempotency_key=?", (idempotency_key,)).fetchone()
+            return dict(row) if row else None
+
+    def get_publication_by_provider_id(self, provider_publish_id):
+        if not provider_publish_id:
+            return None
+        with self._lock, closing(self._connect()) as con:
+            row = con.execute("SELECT * FROM publications WHERE provider_publish_id=?", (provider_publish_id,)).fetchone()
+            return dict(row) if row else None
+
+    def transition_publication(self, idempotency_key, new_state, now=None, provider_publish_id=None, error_code=None):
+        if new_state not in PUBLICATION_STATES:
+            raise DurableStateError("invalid publication state")
+        now = int(time.time() if now is None else now)
+        with self._lock, closing(self._connect()) as con:
+            con.execute("BEGIN IMMEDIATE")
+            row = con.execute("SELECT * FROM publications WHERE idempotency_key=?", (idempotency_key,)).fetchone()
+            if not row:
+                con.execute("ROLLBACK")
+                raise DurableStateError("publication intent not found")
+            current = str(row["state"])
+            if new_state != current and new_state not in _ALLOWED_PUBLICATION_TRANSITIONS.get(current, set()):
+                con.execute("ROLLBACK")
+                raise DurableStateError(f"invalid publication transition {current}->{new_state}")
+            provider = provider_publish_id if provider_publish_id is not None else row["provider_publish_id"]
+            con.execute(
+                """UPDATE publications
+                   SET state=?,provider_publish_id=?,last_error_code=?,updated_at=?
+                   WHERE idempotency_key=?""",
+                (new_state,provider,error_code,now,idempotency_key),
+            )
+            updated = con.execute("SELECT * FROM publications WHERE idempotency_key=?", (idempotency_key,)).fetchone()
+            con.execute("COMMIT")
+            return dict(updated)
+
+    def begin_publication_attempt(self, idempotency_key, now=None):
+        now = int(time.time() if now is None else now)
+        with self._lock, closing(self._connect()) as con:
+            con.execute("BEGIN IMMEDIATE")
+            row = con.execute("SELECT * FROM publications WHERE idempotency_key=?", (idempotency_key,)).fetchone()
+            if not row:
+                con.execute("ROLLBACK")
+                raise DurableStateError("publication intent not found")
+            count = int(row["attempt_count"]) + 1
+            first = int(row["first_attempt_at"]) if row["first_attempt_at"] is not None else now
+            con.execute(
+                """UPDATE publications
+                   SET attempt_count=?,first_attempt_at=?,last_attempt_at=?,updated_at=?
+                   WHERE idempotency_key=?""",
+                (count,first,now,now,idempotency_key),
+            )
+            updated = con.execute("SELECT * FROM publications WHERE idempotency_key=?", (idempotency_key,)).fetchone()
+            con.execute("COMMIT")
+            return dict(updated)
 
     def cleanup(self, now=None):
         now = int(time.time() if now is None else now)
