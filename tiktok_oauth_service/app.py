@@ -7,11 +7,12 @@ from durable_state import DurableState, DurableStateError
 
 AUTH_URL="https://www.tiktok.com/v2/auth/authorize/"
 TOKEN_URL="https://open.tiktokapis.com/v2/oauth/token/"
+REVOKE_URL="https://open.tiktokapis.com/v2/oauth/revoke/"
 CREATOR_INFO_URL="https://open.tiktokapis.com/v2/post/publish/creator_info/query/"
 DIRECT_POST_INIT_URL="https://open.tiktokapis.com/v2/post/publish/video/init/"
 UPLOAD_DRAFT_INIT_URL="https://open.tiktokapis.com/v2/post/publish/inbox/video/init/"
 STATUS_URL="https://open.tiktokapis.com/v2/post/publish/status/fetch/"
-DEFAULT_SCOPES="user.info.basic,video.publish,video.upload"
+DEFAULT_SCOPES="video.publish,video.upload"
 STATE_TTL=600
 SESSION_TTL=86400
 MAX_UPLOAD_BYTES=100*1024*1024
@@ -100,6 +101,99 @@ def publication_identity(sess, operation, video, metadata):
 
 def unknown_provider_outcome(http_status):
     return (not http_status) or int(http_status)>=500
+
+def scope_set(sess):
+    raw=str((sess or {}).get("scope",""))
+    return {x.strip() for x in raw.replace(" ",",").split(",") if x.strip()}
+
+def has_scope(sess, required_scope):
+    return required_scope in scope_set(sess)
+
+def api_form_post(url, fields, timeout=20):
+    body=urllib.parse.urlencode(fields).encode("utf-8")
+    req=urllib.request.Request(
+        url,
+        data=body,
+        headers={"Content-Type":"application/x-www-form-urlencoded","Cache-Control":"no-cache"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req,timeout=timeout) as r:
+            raw=r.read()
+            status=r.status
+    except urllib.error.HTTPError as e:
+        raw=e.read()
+        status=e.code
+    except Exception:
+        return 0,{"error":"network_error"}
+    if not raw:
+        return status,{}
+    try:
+        payload=json.loads(raw.decode("utf-8"))
+    except Exception:
+        payload={"error":"invalid_json"}
+    return status,payload
+
+def refresh_session_if_needed(sid, sess, refresh_margin=900):
+    now=int(time.time())
+    if not sess:
+        return None,"not_authorized"
+    expires_at=int(sess.get("expires_at",0) or 0)
+    if expires_at>now+int(refresh_margin):
+        return sess,None
+    refresh_token=str(sess.get("refresh_token","")).strip()
+    refresh_expires_at=int(sess.get("refresh_expires_at",0) or 0)
+    if not refresh_token or (refresh_expires_at and refresh_expires_at<=now):
+        return None,"refresh_unavailable"
+    status,payload=api_form_post(TOKEN_URL,{
+        "client_key":cfg("TIKTOK_CLIENT_KEY"),
+        "client_secret":cfg("TIKTOK_CLIENT_SECRET"),
+        "grant_type":"refresh_token",
+        "refresh_token":refresh_token,
+    })
+    if status!=200 or not isinstance(payload,dict):
+        return None,"refresh_failed"
+    access=str(payload.get("access_token","")).strip()
+    new_refresh=str(payload.get("refresh_token","")).strip()
+    open_id=str(payload.get("open_id","")).strip()
+    scope=str(payload.get("scope","")).strip()
+    exp=int(payload.get("expires_in",0) or 0)
+    refresh_exp=int(payload.get("refresh_expires_in",0) or 0)
+    if not access or not new_refresh or not open_id or not scope or exp<=0:
+        return None,"refresh_incomplete"
+    if open_id!=str(sess.get("open_id","")):
+        return None,"refresh_account_mismatch"
+    store=state_store()
+    if store is None:
+        return None,"durable_state_required"
+    patch={
+        "access_token":access,
+        "refresh_token":new_refresh,
+        "open_id":open_id,
+        "scope":scope,
+        "expires_at":now+exp,
+        "access_token_sha256":fingerprint(access),
+        "refresh_token_sha256":fingerprint(new_refresh),
+    }
+    if refresh_exp>0:
+        patch["refresh_expires_at"]=now+refresh_exp
+    try:
+        updated=store.patch_session(sid,patch,now=now,ttl=SESSION_TTL)
+    except DurableStateError:
+        return None,"refresh_persist_failed"
+    return updated,None
+
+def require_session_scope(sid, sess, required_scope):
+    if not sess or not sess.get("access_token"):
+        return None,"not_authorized"
+    if not has_scope(sess,required_scope):
+        return None,"missing_scope"
+    refreshed,error=refresh_session_if_needed(sid,sess)
+    if error:
+        return None,error
+    if not has_scope(refreshed,required_scope):
+        return None,"missing_scope"
+    return refreshed,None
 
 def api_json_post(url, token, payload=None, timeout=25):
     body=json.dumps(payload or {}).encode("utf-8")
@@ -358,6 +452,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         p=urllib.parse.urlsplit(self.path)
+        if p.path=="/auth/tiktok/disconnect":
+            return self.disconnect_tiktok()
         if p.path in ("/api/post","/api/private-test","/api/upload-draft") and not mutations_allowed():
             return self.js(423,{"error":"tiktok_mutations_disabled","kill_switch_active":True})
         if p.path=="/api/post":
@@ -431,12 +527,14 @@ class Handler(BaseHTTPRequestHandler):
         open_id=str(payload.get("open_id","")).strip()
         scope=str(payload.get("scope","")).strip()
         exp=int(payload.get("expires_in",0) or 0)
+        refresh_exp=int(payload.get("refresh_expires_in",0) or 0)
         if not access or not refresh or not open_id or exp<=0:
             return self.send_html(502,page("Incomplete token","<div class='card'><h1>استجابة TikTok غير مكتملة</h1></div>"))
         try:
             store.patch_session(sid,{
                 "access_token":access,"refresh_token":refresh,"open_id":open_id,
                 "scope":scope,"expires_at":now+exp,
+                "refresh_expires_at":now+refresh_exp if refresh_exp>0 else 0,
                 "access_token_sha256":fingerprint(access),"refresh_token_sha256":fingerprint(refresh),
             },now=now,ttl=SESSION_TTL)
         except DurableStateError:
@@ -612,8 +710,9 @@ async function poll(id,s){{
 
     def private_test_post(self):
         sid,sess=self.get_session()
-        if not sess or not sess.get("access_token"):
-            return self.redirect("/auth/tiktok/start")
+        sess,auth_error=require_session_scope(sid,sess,"video.publish")
+        if auth_error:
+            return self.js(401 if auth_error!="missing_scope" else 403,{"error":auth_error})
         try:
             length=int(self.headers.get("Content-Length","0"))
         except Exception:
@@ -710,8 +809,9 @@ async function poll(id,s){{
     def post_video(self,p):
         print("POST_STAGE received /api/post", flush=True)
         sid,sess=self.get_session()
-        if not sess or not sess.get("access_token"):
-            return self.js(401,{"error":"not_authorized"})
+        sess,auth_error=require_session_scope(sid,sess,"video.publish")
+        if auth_error:
+            return self.js(401 if auth_error!="missing_scope" else 403,{"error":auth_error})
         if self.headers.get("X-CSRF-Token","")!=sess.get("csrf",""):
             return self.js(403,{"error":"csrf_failed"})
         q=urllib.parse.parse_qs(p.query,keep_blank_values=True)
@@ -895,8 +995,9 @@ async function poll(id,s){{
 
     def upload_draft(self,p):
         sid,sess=self.get_session()
-        if not sess or not sess.get("access_token"):
-            return self.js(401,{"error":"not_authorized"})
+        sess,auth_error=require_session_scope(sid,sess,"video.upload")
+        if auth_error:
+            return self.js(401 if auth_error!="missing_scope" else 403,{"error":auth_error})
         if self.headers.get("X-CSRF-Token","")!=sess.get("csrf",""):
             return self.js(403,{"error":"csrf_failed"})
         q=urllib.parse.parse_qs(p.query,keep_blank_values=True)
@@ -1043,6 +1144,33 @@ async function poll(id,s){{
             "local_state":"PROCESSING",
         })
 
+    def disconnect_tiktok(self):
+        sid,sess=self.get_session()
+        if not sess or not sess.get("access_token"):
+            return self.js(200,{"ok":True,"local_disconnected":True,"remote_revoke_confirmed":False})
+        if self.headers.get("X-CSRF-Token","")!=sess.get("csrf",""):
+            return self.js(403,{"error":"csrf_failed"})
+        access=str(sess.get("access_token",""))
+        status,payload=api_form_post(REVOKE_URL,{
+            "client_key":cfg("TIKTOK_CLIENT_KEY"),
+            "client_secret":cfg("TIKTOK_CLIENT_SECRET"),
+            "token":access,
+        })
+        store=state_store()
+        if store is None:
+            return self.js(503,{"error":"durable_state_required"})
+        try:
+            store.delete_session(sid)
+        except DurableStateError:
+            return self.js(503,{"error":"local_disconnect_failed"})
+        confirmed=(status==200)
+        return self.js(200 if confirmed else 502,{
+            "ok":confirmed,
+            "local_disconnected":True,
+            "remote_revoke_confirmed":confirmed,
+            "provider_http_status":status,
+        })
+
     def status_api(self,q):
         sid,sess=self.get_session()
         if not sess or not sess.get("access_token"):
@@ -1059,6 +1187,12 @@ async function poll(id,s){{
             return self.js(503,{"error":"publication_ledger_failed"})
         if not record:
             return self.js(404,{"error":"publication_record_not_found"})
+        if record.get("account_hash")!=fingerprint(str(sess.get("open_id",""))):
+            return self.js(403,{"error":"publication_account_mismatch"})
+        required_scope="video.publish" if record.get("operation")=="DIRECT_POST" else "video.upload"
+        sess,auth_error=require_session_scope(sid,sess,required_scope)
+        if auth_error:
+            return self.js(401 if auth_error!="missing_scope" else 403,{"error":auth_error})
         if record.get("account_hash")!=fingerprint(str(sess.get("open_id",""))):
             return self.js(403,{"error":"publication_account_mismatch"})
 
