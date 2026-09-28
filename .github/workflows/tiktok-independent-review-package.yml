@@ -14,38 +14,56 @@ permissions:
 jobs:
   build-review-package:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
-      - name: Checkout frozen candidate
+      - name: Checkout exact frozen candidate with full Git history
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: acb5aff7a79de29f82c150428d29136148b51b36
           path: candidate_repo
+          fetch-depth: 0
           persist-credentials: false
 
-      - name: Checkout exact handoff instructions
+      - name: Checkout review handoff instructions
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: 29800811cb2d492fffb8ddcaba011fca0b19b85c
+          ref: 7a76ed1b5a3dd6a61caa83f88bd93fdfeb271795
           path: handoff_repo
+          fetch-depth: 1
           persist-credentials: false
 
-      - name: Build exact-target-bound package
+      - name: Build independently verifiable exact-target package
         shell: bash
         run: |
           set -euo pipefail
-          PACKAGE="TrendRadar-TikTok-Independent-Review-Package-20260928-acb5aff7"
-          mkdir -p "$PACKAGE/candidate/.github/workflows"
-          mkdir -p "$PACKAGE/candidate/review/tiktok"
-          mkdir -p "$PACKAGE/candidate/tiktok_oauth_service"
+          PACKAGE="TrendRadar-TikTok-Independent-Review-Package-20260928-ExactTarget-v2-acb5aff7"
+          mkdir -p "$PACKAGE/exact_target"
+          mkdir -p "$PACKAGE/candidate"
           mkdir -p "$PACKAGE/producer_evidence"
 
-          cp -a candidate_repo/tiktok_oauth_service/. "$PACKAGE/candidate/tiktok_oauth_service/"
-          cp -a candidate_repo/review/tiktok/. "$PACKAGE/candidate/review/tiktok/"
-          cp candidate_repo/.github/workflows/tiktok-runtime-remediation-ci.yml "$PACKAGE/candidate/.github/workflows/"
+          cd candidate_repo
+          ACTUAL_COMMIT="$(git rev-parse HEAD)"
+          ACTUAL_TREE="$(git rev-parse 'HEAD^{tree}')"
+          test "$ACTUAL_COMMIT" = "acb5aff7a79de29f82c150428d29136148b51b36"
+          test "$ACTUAL_TREE" = "56694a061bbd5ca09f1d8db8e014e04200258403"
+
+          git bundle create "../$PACKAGE/exact_target/TikTok-Exact-Target-acb5aff7.bundle" HEAD
+          git bundle verify "../$PACKAGE/exact_target/TikTok-Exact-Target-acb5aff7.bundle"             > "../$PACKAGE/exact_target/BUNDLE_VERIFY_PRODUCER.txt" 2>&1
+
+          {
+            echo "EXACT_COMMIT=$ACTUAL_COMMIT"
+            echo "EXACT_TREE=$ACTUAL_TREE"
+            git show --no-patch --format='COMMIT=%H%nTREE=%T%nPARENTS=%P%nAUTHOR_DATE=%aI%nCOMMITTER_DATE=%cI%nSUBJECT=%s' HEAD
+          } > "../$PACKAGE/exact_target/GIT_SHOW_COMMIT_TREE.txt"
+
+          git ls-tree -r --full-tree HEAD > "../$PACKAGE/exact_target/FULL_TREE_LS.txt"
+          git archive --format=tar --output="../$PACKAGE/exact_target/full-repository-snapshot.tar" HEAD
+          git archive --format=tar HEAD | tar -x -C "../$PACKAGE/candidate"
+          cd ..
 
           cp handoff_repo/review/tiktok/TIKTOK_INDEPENDENT_REVIEW_REQUEST_20260928.md "$PACKAGE/INDEPENDENT_REVIEW_README.md"
           cp handoff_repo/review/tiktok/TIKTOK_REVIEWER_ACTIONS_AR_20260928.md "$PACKAGE/REVIEWER_ACTIONS_AR.md"
+          cp handoff_repo/review/tiktok/EXACT_TARGET_REOPEN_INSTRUCTIONS_20260928.md "$PACKAGE/EXACT_TARGET_REOPEN_INSTRUCTIONS.md"
 
           cat > "$PACKAGE/EXACT_TARGET.txt" <<'EOF'
           PROJECT=TrendHunter / Trend Radar
@@ -61,58 +79,39 @@ jobs:
           CANDIDATE_DEPLOYED=false
           EOF
 
-          cat > "$PACKAGE/producer_evidence/PRODUCER_EVIDENCE.md" <<'EOF'
-          # Producer evidence — NOT independent acceptance
-
-          This directory records producer-observed anchors only. The independent reviewer must reproduce or independently verify them.
-
-          - Candidate commit: acb5aff7a79de29f82c150428d29136148b51b36
-          - Candidate tree: 56694a061bbd5ca09f1d8db8e014e04200258403
-          - Producer-observed candidate CI run: 36362387452
-          - Producer-observed CI result: SUCCESS
-          - Live Render service during remediation: trendradar-tiktok-oauth
-          - Live branch during remediation: tiktok-oauth-service
-          - Live commit during remediation: a421e755c31bf8e00a2cffc047db2c7d9e70bcbe
-          - Hardened candidate deployed: NO
-          - Pending TikTok Developer App Review changed/withdrawn/resubmitted: NO
-          - Public publishing authority granted by this package: NO
-
-          Known open external/independent gates are documented in INDEPENDENT_REVIEW_README.md and the candidate evidence matrix.
-          EOF
-
-          cat > "$PACKAGE/FILE_BLOB_MAP.tsv" <<'EOF'
-          path	git_blob_sha
-          .github/workflows/tiktok-runtime-remediation-ci.yml	5e0bfcfe4d93f404dabfd8adf744531e65c93780
-          review/tiktok/TIKTOK_INCIDENT_RECOVERY_RUNBOOK_20260928.md	dc56ecfdd8be31775162d3559f87229d0262f301
-          review/tiktok/TIKTOK_OWNER_RECOVERY_PACKAGE_20260928.md	4b0c2a546c978866d5beaba409cc6f6efbe54f10
-          review/tiktok/TIKTOK_SECURITY_RELIABILITY_EVIDENCE_MATRIX_20260928.md	78a1e07a25703b81d944675ad3c225286017e67d
-          review/tiktok/TIKTOK_SECURITY_RELIABILITY_REMEDIATION_PLAN_20260928.md	bc46d3d1de1ad2c320b39e3dd4815ec1270a5ac3
-          tiktok_oauth_service/README.md	2ad5d50c5a5c8e0cf52777d6a078b090d4e610d7
-          tiktok_oauth_service/app.py	830134f9c643606924a29435fbcd0c91731b1ab4
-          tiktok_oauth_service/demo_video.b64	016580fe6cf858ee5108f112b5a43f6ce1aeccf2
-          tiktok_oauth_service/durable_state.py	e766082b75b9230d72306ea433f76d80e558ede5
-          tiktok_oauth_service/media_validation.py	6f7f2ddb40791b70054fb775b20863418e6978d5
-          tiktok_oauth_service/requirements.txt	5a1620d2a6988929b9e6e6ecf5d6ba94eb3dc76d
-          tiktok_oauth_service/test_app_safety.py	394012347651f607e5d0dae017cc67a7aefceb04
-          tiktok_oauth_service/test_atomicity.py	ea60e7f0a287417f38b8de4ae8fd5752f360696b
-          tiktok_oauth_service/test_durable_state.py	68a8f65a280a04a014e7dcae80967bd1a50f1982
-          tiktok_oauth_service/test_media_validation.py	b642dbf2206134212a89db441f906f0b7d91c2b4
-          tiktok_oauth_service/test_reconciliation.py	f6c698d7da5f8ca5db3c170d1f72d0415bf43056
-          tiktok_oauth_service/test_recovery.py	6648b374c80920b42283c64fd51613bb84fc19ec
-          EOF
-
           cat > "$PACKAGE/START_HERE.md" <<'EOF'
           # START HERE — Independent Reviewer
 
-          1. Read EXACT_TARGET.txt.
-          2. Verify the GitHub frozen branch, exact commit, and exact tree before granting any PASS.
-          3. Read INDEPENDENT_REVIEW_README.md in full.
-          4. Read REVIEWER_ACTIONS_AR.md for the concise owner-required workflow.
-          5. Treat producer_evidence as untrusted producer evidence; independently reproduce material claims.
-          6. Review only candidate/ as the code/document target.
-          7. Do not deploy, merge, Recall, resubmit TikTok App Review, enable public posting, or set TIKTOK_AUDIT_APPROVED=true.
-          8. Use only PASS / FAIL / NOT VERIFIED / N/A per required item, with reproducible evidence.
-          9. A final PASS is forbidden while any Critical requirement lacks independent evidence or production persistence/recovery remains unverified.
+          This is replacement package v2 created only to cure the prior Evidence/Target Binding failure.
+
+          1. Read EXACT_TARGET_REOPEN_INSTRUCTIONS.md FIRST.
+          2. Independently run git bundle verify on exact_target/TikTok-Exact-Target-acb5aff7.bundle.
+          3. Clone that bundle and independently verify:
+             - HEAD = acb5aff7a79de29f82c150428d29136148b51b36
+             - HEAD^{tree} = 56694a061bbd5ca09f1d8db8e014e04200258403
+          4. If either mismatch occurs, STOP FAIL-CLOSED.
+          5. Only after Exact Target PASS, read INDEPENDENT_REVIEW_README.md in full.
+          6. Treat all producer evidence as untrusted until independently reproduced.
+          7. candidate/ is now the FULL tracked repository snapshot from the exact commit, not a TikTok-only subset.
+          8. Do not Deploy, Merge, alter Render, Recall/resubmit TikTok App Review, enable public posting, or set TIKTOK_AUDIT_APPROVED=true.
+          9. Use only PASS / FAIL / NOT VERIFIED / N/A per item with reproducible evidence.
+          EOF
+
+          cat > "$PACKAGE/producer_evidence/PRODUCER_EVIDENCE.md" <<'EOF'
+          # Producer evidence — informational only
+
+          This is NOT independent evidence and must not be accepted without reproduction.
+
+          Producer-observed anchors:
+          - exact commit: acb5aff7a79de29f82c150428d29136148b51b36
+          - exact tree: 56694a061bbd5ca09f1d8db8e014e04200258403
+          - previous candidate CI run: 36362387452
+          - previous candidate CI result: SUCCESS
+          - live Render branch during remediation: tiktok-oauth-service
+          - live Render commit during remediation: a421e755c31bf8e00a2cffc047db2c7d9e70bcbe
+          - hardened candidate deployed: NO
+          - TikTok App Review recalled/resubmitted by this remediation: NO
+          - public auto-publish authorized: NO
           EOF
 
           (
@@ -122,15 +121,14 @@ jobs:
 
           zip -qr "$PACKAGE.zip" "$PACKAGE"
           sha256sum "$PACKAGE.zip" > "$PACKAGE.zip.sha256"
-          echo "PACKAGE_NAME=$PACKAGE.zip" >> "$GITHUB_ENV"
 
-      - name: Upload independent review package
+      - name: Upload exact-target independent review package
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: TrendRadar-TikTok-Independent-Review-Package-20260928-acb5aff7
+          name: TrendRadar-TikTok-Independent-Review-Package-20260928-ExactTarget-v2-acb5aff7
           path: |
-            TrendRadar-TikTok-Independent-Review-Package-20260928-acb5aff7.zip
-            TrendRadar-TikTok-Independent-Review-Package-20260928-acb5aff7.zip.sha256
+            TrendRadar-TikTok-Independent-Review-Package-20260928-ExactTarget-v2-acb5aff7.zip
+            TrendRadar-TikTok-Independent-Review-Package-20260928-ExactTarget-v2-acb5aff7.zip.sha256
           if-no-files-found: error
           compression-level: 0
           retention-days: 30
