@@ -5,6 +5,8 @@ import unittest
 from urllib.parse import parse_qs, urlparse
 from unittest.mock import patch
 
+import requests
+
 from cryptography.fernet import Fernet
 
 import app as app_module
@@ -129,7 +131,7 @@ class DirectBridgeRemediationTests(unittest.TestCase):
             fresh_store = DurableStateStore(db_url)
             status = fresh_store.token_status()
             self.assertTrue(status["connected"])
-            self.assertTrue(status["refresh_present"])
+            self.assertTrue(status["refresh_credential_present"])
             self.assertEqual(status["profile_id"], env["SNAPCHAT_PUBLIC_PROFILE_ID"])
             self.assertEqual(status["username"], "trendradarar")
 
@@ -150,7 +152,7 @@ class DirectBridgeRemediationTests(unittest.TestCase):
 
             status = DurableStateStore(db_url).token_status()
             self.assertFalse(status["connected"])
-            self.assertFalse(status["refresh_present"])
+            self.assertFalse(status["refresh_credential_present"])
 
     def test_disconnect_invalidates_persisted_tokens(self):
         db_url = self._sqlite_url()
@@ -173,7 +175,7 @@ class DirectBridgeRemediationTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             after = DurableStateStore(db_url).token_status()
             self.assertFalse(after["connected"])
-            self.assertFalse(after["refresh_present"])
+            self.assertFalse(after["refresh_credential_present"])
 
     def test_direct_publication_gate_requires_all_assurance_controls(self):
         db_url = self._sqlite_url()
