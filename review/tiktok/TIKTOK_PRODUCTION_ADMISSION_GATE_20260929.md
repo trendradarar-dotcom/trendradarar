@@ -60,9 +60,11 @@ Current state:
 
 ### G-ALERT — external alert delivery
 
-Internal preparation now includes:
+Internal preparation includes:
 - secret-free `/ops/health`;
 - signed webhook watchdog tooling.
+
+Independent R4 pre-qualification found the first watchdog version could miss UNKNOWN/stale conditions when source flags were inconsistent and could miss HTTP 404/429 responses. The post-R4 remediation now treats all non-2xx, malformed/incomplete health schema, UNKNOWN>0 and stale>0 as attention-required. This remediation is NOT independently closed yet.
 
 Required external evidence:
 1. UNKNOWN/stale/degraded health causes alert;
@@ -128,9 +130,11 @@ until the owner explicitly authorizes that external/financial production-admissi
 
 - `tools/tiktok_ops_watchdog.py`
   - reads secret-free `/ops/health`
-  - treats unreachable/degraded/UNKNOWN/stale state as attention required
+  - fail-closes on every non-2xx or malformed/incomplete health response
+  - independently evaluates UNKNOWN and stale counts even if source flags are inconsistent
   - sends HMAC-SHA256 signed JSON to an HTTPS webhook
   - does not send OAuth tokens/secrets
+  - remains pending independent post-R4 retest
 
 These tools are producer preparation only. Their existence does not close production gates.
 
