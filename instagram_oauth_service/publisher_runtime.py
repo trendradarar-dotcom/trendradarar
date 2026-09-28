@@ -689,6 +689,17 @@ class PublisherRuntime:
                 return conflict
             return 202, self._safe_job(self._get_job(intent["idempotency_key"]))
 
+        if self._unresolved_ambiguity_exists():
+            conflict = self._reserve_job(intent, "HOLD_CIRCUIT_OPEN")
+            if conflict:
+                return conflict
+            self._transition(
+                intent["idempotency_key"],
+                "HOLD_CIRCUIT_OPEN",
+                error_code="UNRESOLVED_PUBLICATION_AMBIGUITY",
+            )
+            return 503, self._safe_job(self._get_job(intent["idempotency_key"]))
+
         published_24h, inflight, failures_15m, unpublished_queue, mutations_1m = self._count_guard()
         if unpublished_queue >= self.max_unpublished_queue:
             conflict = self._reserve_job(intent, "HOLD_QUEUE_LIMIT")
@@ -714,14 +725,6 @@ class PublisherRuntime:
             return 429, self._safe_job(self._get_job(intent["idempotency_key"]))
         if failures_15m >= self.circuit_failure_threshold:
             self._transition(intent["idempotency_key"], "HOLD_CIRCUIT_OPEN", error_code="RECENT_FAILURE_THRESHOLD")
-            return 503, self._safe_job(self._get_job(intent["idempotency_key"]))
-
-        if self._unresolved_ambiguity_exists(exclude_key=intent["idempotency_key"]):
-            self._transition(
-                intent["idempotency_key"],
-                "HOLD_CIRCUIT_OPEN",
-                error_code="UNRESOLVED_PUBLICATION_AMBIGUITY",
-            )
             return 503, self._safe_job(self._get_job(intent["idempotency_key"]))
 
         rec, credential_error = self._credential_gate()
