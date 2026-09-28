@@ -28,9 +28,11 @@ jobs:
           python -m py_compile tiktok_oauth_service/test_app_safety.py
           python -m py_compile tiktok_oauth_service/test_recovery.py
           python -m py_compile tiktok_oauth_service/test_reconciliation.py
+          python -m py_compile tiktok_oauth_service/test_media_validation.py
+          python -m py_compile tiktok_oauth_service/test_atomicity.py
       - name: Durable state and safety-gate unit tests
         working-directory: tiktok_oauth_service
-        run: python -m unittest -v test_durable_state.py test_app_safety.py test_recovery.py test_reconciliation.py
+        run: python -m unittest -v test_durable_state.py test_app_safety.py test_recovery.py test_reconciliation.py test_media_validation.py test_atomicity.py
       - name: No legacy process-memory OAuth stores
         run: |
           ! grep -q '_STATES' tiktok_oauth_service/app.py
