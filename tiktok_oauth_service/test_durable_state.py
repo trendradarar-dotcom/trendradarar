@@ -181,6 +181,23 @@ class DurableStateTests(unittest.TestCase):
                 "BAD",decision="BLOCK",detail={"access_token":"must-not-log"}
             )
 
+    def test_publication_health_flags_unknown_and_stale(self):
+        self.store.create_publication_intent(
+            "health-1","a"*64,"acct-health","DIRECT_POST","b"*64,now=11000
+        )
+        ok, _ = self.store.admit_publication("health-1",6,24,2,4,12,48,now=11001)
+        self.assertTrue(ok)
+        self.store.transition_publication("health-1","SAFETY_APPROVED",now=11002)
+        self.store.begin_publication_attempt("health-1",now=11003)
+        self.store.transition_publication("health-1","PUBLISH_REQUESTED",now=11004)
+        snap = self.store.publication_health(now=12000,stale_processing_seconds=900)
+        self.assertTrue(snap["attention_required"])
+        self.assertEqual(snap["stale_nonterminal_count"],1)
+        self.store.transition_publication("health-1","UNKNOWN",now=12001,error_code="timeout")
+        snap2 = self.store.publication_health(now=12002,stale_processing_seconds=900)
+        self.assertTrue(snap2["attention_required"])
+        self.assertEqual(snap2["unknown_count"],1)
+
     def test_tamper_fails_closed(self):
         self.store.upsert_session("sid", {"access_token": "x"}, now=1, ttl=100)
         with closing(sqlite3.connect(self.db)) as con:
