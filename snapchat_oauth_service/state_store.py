@@ -100,6 +100,8 @@ class DurableStateStore:
             CREATE TABLE IF NOT EXISTS snapchat_publications (
                 profile_id TEXT NOT NULL,
                 publication_id TEXT NOT NULL,
+                content_id TEXT NOT NULL,
+                job_id TEXT NOT NULL,
                 state TEXT NOT NULL,
                 attempt_count INTEGER NOT NULL,
                 description TEXT,
@@ -301,6 +303,8 @@ class DurableStateStore:
         *,
         profile_id: str,
         publication_id: str,
+        content_id: str,
+        job_id: str,
         correlation_id: str,
         description: str,
         media_sha256: str,
@@ -327,6 +331,19 @@ class DurableStateStore:
                 )
                 existing = self._dict(cur.fetchone())
                 if existing:
+                    payload_matches = (
+                        str(existing.get("content_id") or "") == content_id
+                        and str(existing.get("job_id") or "") == job_id
+                        and str(existing.get("description_hash") or "") == description_hash
+                        and str(existing.get("media_sha256") or "") == media_sha256
+                        and abs(float(existing.get("media_duration") or 0) - float(duration)) <= 0.001
+                        and int(existing.get("media_width") or 0) == int(width)
+                        and int(existing.get("media_height") or 0) == int(height)
+                    )
+                    if not payload_matches:
+                        conn.rollback()
+                        raise StateStoreError("publication_payload_mismatch")
+
                     state = existing["state"]
                     attempts = int(existing.get("attempt_count") or 0)
                     age = now - int(existing.get("created_at") or now)
@@ -341,20 +358,12 @@ class DurableStateStore:
                                 """
                                 UPDATE snapchat_publications
                                 SET state='RECEIVED', attempt_count=attempt_count+1,
-                                    correlation_id=?, description=?, description_hash=?,
-                                    media_sha256=?, media_duration=?, media_width=?, media_height=?,
-                                    updated_at=?, last_error=NULL
+                                    correlation_id=?, updated_at=?, last_error=NULL
                                 WHERE profile_id=? AND publication_id=?
                                 """
                             ),
                             (
                                 correlation_id,
-                                description,
-                                description_hash,
-                                media_sha256,
-                                duration,
-                                width,
-                                height,
                                 now,
                                 profile_id,
                                 publication_id,
@@ -404,15 +413,17 @@ class DurableStateStore:
                     self._sql(
                         """
                         INSERT INTO snapchat_publications
-                        (profile_id,publication_id,state,attempt_count,description,description_hash,
+                        (profile_id,publication_id,content_id,job_id,state,attempt_count,description,description_hash,
                          media_sha256,media_duration,media_width,media_height,correlation_id,
                          created_at,updated_at)
-                        VALUES (?,?, 'RECEIVED',1,?,?,?,?,?,?,?,?,?)
+                        VALUES (?,?,?,?, 'RECEIVED',1,?,?,?,?,?,?,?,?,?)
                         """
                     ),
                     (
                         profile_id,
                         publication_id,
+                        content_id,
+                        job_id,
                         description,
                         description_hash,
                         media_sha256,
