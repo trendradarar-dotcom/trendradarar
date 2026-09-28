@@ -135,11 +135,23 @@ class DurableState:
                     updated_at INTEGER NOT NULL
                 )"""
             )
+            con.execute(
+                """CREATE TABLE IF NOT EXISTS mutation_events(
+                    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    idempotency_key TEXT NOT NULL UNIQUE,
+                    account_hash TEXT NOT NULL,
+                    operation TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    FOREIGN KEY(idempotency_key) REFERENCES publications(idempotency_key)
+                )"""
+            )
             con.execute("CREATE INDEX IF NOT EXISTS idx_oauth_states_exp ON oauth_states(expires_at)")
             con.execute("CREATE INDEX IF NOT EXISTS idx_sessions_exp ON sessions(expires_at)")
             con.execute("CREATE INDEX IF NOT EXISTS idx_handoffs_exp ON handoffs(expires_at)")
             con.execute("CREATE INDEX IF NOT EXISTS idx_publications_provider ON publications(provider_publish_id)")
             con.execute("CREATE INDEX IF NOT EXISTS idx_publications_account ON publications(account_hash,updated_at)")
+            con.execute("CREATE INDEX IF NOT EXISTS idx_mutation_events_time ON mutation_events(created_at)")
+            con.execute("CREATE INDEX IF NOT EXISTS idx_mutation_events_account_time ON mutation_events(account_hash,created_at)")
 
     def _encrypt_json(self, payload):
         raw = json.dumps(payload, separators=(",", ":"), sort_keys=True, ensure_ascii=False).encode("utf-8")
@@ -339,6 +351,66 @@ class DurableState:
         with self._lock, closing(self._connect()) as con:
             row = con.execute("SELECT * FROM publications WHERE provider_publish_id=?", (provider_publish_id,)).fetchone()
             return dict(row) if row else None
+
+    def admit_publication(self, idempotency_key, max_per_hour, max_per_day, max_active_per_account, max_active_global, now=None):
+        now = int(time.time() if now is None else now)
+        limits = [int(max_per_hour),int(max_per_day),int(max_active_per_account),int(max_active_global)]
+        if any(v <= 0 for v in limits):
+            raise DurableStateError("publication hard limits must be positive")
+        active_states = ("VALIDATED","SAFETY_APPROVED","PUBLISH_REQUESTED","UPLOAD_STARTED","UPLOADED","PROCESSING","UNKNOWN")
+        with self._lock, closing(self._connect()) as con:
+            con.execute("BEGIN IMMEDIATE")
+            row = con.execute("SELECT * FROM publications WHERE idempotency_key=?", (idempotency_key,)).fetchone()
+            if not row:
+                con.execute("ROLLBACK")
+                raise DurableStateError("publication intent not found")
+            if row["state"] != "RECEIVED":
+                con.execute("ROLLBACK")
+                raise DurableStateError("publication intent is not awaiting admission")
+            account_hash = str(row["account_hash"])
+            hour_count = int(con.execute(
+                "SELECT COUNT(*) FROM mutation_events WHERE account_hash=? AND created_at>?",
+                (account_hash, now-3600),
+            ).fetchone()[0])
+            day_count = int(con.execute(
+                "SELECT COUNT(*) FROM mutation_events WHERE account_hash=? AND created_at>?",
+                (account_hash, now-86400),
+            ).fetchone()[0])
+            ph = ",".join("?" for _ in active_states)
+            active_account = int(con.execute(
+                f"SELECT COUNT(*) FROM publications WHERE account_hash=? AND idempotency_key<>? AND state IN ({ph})",
+                (account_hash,idempotency_key,*active_states),
+            ).fetchone()[0])
+            active_global = int(con.execute(
+                f"SELECT COUNT(*) FROM publications WHERE idempotency_key<>? AND state IN ({ph})",
+                (idempotency_key,*active_states),
+            ).fetchone()[0])
+            reason = None
+            if hour_count >= limits[0]:
+                reason = "hourly_account_limit"
+            elif day_count >= limits[1]:
+                reason = "daily_account_limit"
+            elif active_account >= limits[2]:
+                reason = "active_account_limit"
+            elif active_global >= limits[3]:
+                reason = "active_global_limit"
+            if reason:
+                con.execute(
+                    "UPDATE publications SET state='FAILED',last_error_code=?,updated_at=? WHERE idempotency_key=?",
+                    (reason,now,idempotency_key),
+                )
+                con.execute("COMMIT")
+                return False, reason
+            con.execute(
+                "INSERT INTO mutation_events(idempotency_key,account_hash,operation,created_at) VALUES(?,?,?,?)",
+                (idempotency_key,account_hash,str(row["operation"]),now),
+            )
+            con.execute(
+                "UPDATE publications SET state='VALIDATED',updated_at=? WHERE idempotency_key=?",
+                (now,idempotency_key),
+            )
+            con.execute("COMMIT")
+            return True, None
 
     def transition_publication(self, idempotency_key, new_state, now=None, provider_publish_id=None, error_code=None):
         if new_state not in PUBLICATION_STATES:
