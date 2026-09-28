@@ -48,27 +48,83 @@ def _json_request(url, method="GET", body=None, headers=None, timeout=15):
     return status, payload
 
 
+def _nonnegative_int(value, field_name):
+    if isinstance(value, bool):
+        raise WatchdogError(f"{field_name}_invalid")
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise WatchdogError(f"{field_name}_invalid") from exc
+    if parsed < 0:
+        raise WatchdogError(f"{field_name}_invalid")
+    return parsed
+
+
 def fetch_health(url, timeout=15):
     try:
         status, payload = _json_request(url, timeout=timeout)
         if not isinstance(payload, dict):
             raise WatchdogError("health_payload_not_object")
-        attention = bool(
-            status >= 500
-            or payload.get("attention_required")
-            or payload.get("durable_state_ready") is False
-            or payload.get("ok") is False
+
+        # Fail closed on malformed/incomplete operational-health schema.
+        required = (
+            "ok",
+            "durable_state_ready",
+            "attention_required",
+            "unknown_count",
+            "stale_nonterminal_count",
         )
+        missing = [key for key in required if key not in payload]
+        if missing:
+            raise WatchdogError("health_schema_missing_required_fields")
+
+        unknown_count = _nonnegative_int(payload.get("unknown_count"), "unknown_count")
+        stale_count = _nonnegative_int(
+            payload.get("stale_nonterminal_count"),
+            "stale_nonterminal_count",
+        )
+
+        http_degraded = not (200 <= int(status) < 300)
+        source_attention = payload.get("attention_required") is True
+        source_not_ok = payload.get("ok") is not True
+        durable_not_ready = payload.get("durable_state_ready") is not True
+        local_unknown = unknown_count > 0
+        local_stale = stale_count > 0
+
+        attention = bool(
+            http_degraded
+            or source_attention
+            or source_not_ok
+            or durable_not_ready
+            or local_unknown
+            or local_stale
+        )
+
+        reasons = []
+        if http_degraded:
+            reasons.append("http_non_2xx")
+        if source_attention:
+            reasons.append("source_attention_required")
+        if source_not_ok:
+            reasons.append("source_not_ok")
+        if durable_not_ready:
+            reasons.append("durable_state_not_ready")
+        if local_unknown:
+            reasons.append("unknown_publications_present")
+        if local_stale:
+            reasons.append("stale_nonterminal_publications_present")
+
         return {
             "reachable": True,
-            "http_status": status,
+            "http_status": int(status),
             "attention_required": attention,
+            "attention_reasons": reasons,
             "health": {
                 "ok": payload.get("ok"),
                 "durable_state_ready": payload.get("durable_state_ready"),
                 "attention_required": payload.get("attention_required"),
-                "unknown_count": payload.get("unknown_count"),
-                "stale_nonterminal_count": payload.get("stale_nonterminal_count"),
+                "unknown_count": unknown_count,
+                "stale_nonterminal_count": stale_count,
                 "active_count": payload.get("active_count"),
                 "kill_switch_active": payload.get("kill_switch_active"),
                 "mutations_allowed": payload.get("mutations_allowed"),
@@ -79,6 +135,7 @@ def fetch_health(url, timeout=15):
             "reachable": False,
             "http_status": 0,
             "attention_required": True,
+            "attention_reasons": ["watchdog_health_fetch_or_schema_failure"],
             "error": str(exc),
             "health": {},
         }
