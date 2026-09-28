@@ -62,7 +62,7 @@ def scan_text(text: str, source: str, findings: list[str], added_only: bool = Fa
         if looks_test_value(value):
             continue
 
-        if any(token in value for token in ("os.getenv", "os.environ", "\${", "{{", "<", ">")):
+        if any(token in value for token in ("os.getenv", "os.environ", "${", "{{", "<", ">")):
             continue
         if len(value) >= 24 and entropy(value) >= 3.2:
             findings.append(f"{source}:{line_no}:sensitive_literal:{match.group('key').lower()}")
