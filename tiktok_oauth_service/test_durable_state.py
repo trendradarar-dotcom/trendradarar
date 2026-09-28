@@ -142,6 +142,45 @@ class DurableStateTests(unittest.TestCase):
         self.assertFalse(ok2)
         self.assertEqual(reason2, "hourly_account_limit")
 
+    def test_global_hourly_limit_bounds_multi_account_blast_radius(self):
+        for idx, account in enumerate(("acct-a","acct-b"), start=1):
+            idem=f"global-{idx}"
+            self.store.create_publication_intent(
+                idem,str(idx)*64,account,"DIRECT_POST","9"*64,now=9000+idx
+            )
+            ok, reason = self.store.admit_publication(
+                idem,6,24,2,4,1,48,now=9010+idx
+            )
+            if idx == 1:
+                self.assertTrue(ok); self.assertIsNone(reason)
+                self.store.transition_publication(idem,"FAILED",now=9020+idx,error_code="test_terminal")
+            else:
+                self.assertFalse(ok)
+                self.assertEqual(reason,"hourly_global_limit")
+
+    def test_audit_trail_records_admission_and_state_without_secrets(self):
+        self.store.create_publication_intent(
+            "audit-1","a"*64,"acct","DIRECT_POST","b"*64,now=10000
+        )
+        ok, _ = self.store.admit_publication("audit-1",6,24,2,4,12,48,now=10001)
+        self.assertTrue(ok)
+        self.store.transition_publication("audit-1","SAFETY_APPROVED",now=10002)
+        events = self.store.list_audit_events("audit-1")
+        types = [e["event_type"] for e in events]
+        self.assertIn("PUBLICATION_INTENT_CREATED",types)
+        self.assertIn("PUBLICATION_ADMISSION",types)
+        self.assertIn("PUBLICATION_STATE",types)
+        joined = "\n".join(str(e) for e in events).lower()
+        self.assertNotIn("access_token",joined)
+        self.assertNotIn("refresh_token",joined)
+        self.assertNotIn("client_secret",joined)
+
+    def test_audit_detail_rejects_secret_field_names(self):
+        with self.assertRaises(DurableStateError):
+            self.store.record_audit_event(
+                "BAD","BLOCK",detail={"access_token":"must-not-log"}
+            )
+
     def test_tamper_fails_closed(self):
         self.store.upsert_session("sid", {"access_token": "x"}, now=1, ttl=100)
         with closing(sqlite3.connect(self.db)) as con:
