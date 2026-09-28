@@ -1,11 +1,6 @@
-name: TikTok Independent Review Package
+name: TikTok Independent Review Package — Legacy R1
 
 on:
-  push:
-    branches:
-      - tiktok-runtime-reliability-remediation-20260928
-    paths:
-      - .github/workflows/tiktok-independent-review-package.yml
   workflow_dispatch:
 
 permissions:
