@@ -104,17 +104,17 @@ def _state_store_status() -> dict:
         return {
             "ready": ready,
             "production_durable": bool(store.production_durable),
-            "token_persisted": token_status["persisted"],
+            "credential_record_present": token_status["persisted"],
             "connected": token_status["connected"],
-            "refresh_present": token_status["refresh_present"],
+            "refresh_credential_present": token_status["refresh_credential_present"],
         }
     except Exception:
         return {
             "ready": False,
             "production_durable": False,
-            "token_persisted": False,
+            "credential_record_present": False,
             "connected": False,
-            "refresh_present": False,
+            "refresh_credential_present": False,
         }
 
 
@@ -152,7 +152,7 @@ def _production_gate_errors() -> list[str]:
         errors.append("durable_state_store_unavailable")
     elif not state["production_durable"]:
         errors.append("production_requires_postgresql_state_store")
-    if not state["connected"] or not state["refresh_present"]:
+    if not state["connected"] or not state["refresh_credential_present"]:
         errors.append("durable_oauth_connection_not_ready")
     return errors
 
@@ -680,7 +680,7 @@ def health():
             "durable_store_ready": state["ready"],
             "durable_store_production": state["production_durable"],
             "oauth_connected": state["connected"],
-            "refresh_token_persisted": state["refresh_present"],
+            "refresh_credential_persisted": state["refresh_credential_present"],
         },
         "limits": limits,
         "publication_gate_errors": _production_gate_errors(),
@@ -818,8 +818,8 @@ def auth_callback():
             "scope": payload.get("scope", SCOPE),
             "expires_in": payload.get("expires_in"),
             "access_token_fingerprint": _token_fingerprint(payload.get("access_token")),
-            "refresh_token_persisted": True,
-            "tokens_exposed": False,
+            "refresh_credential_persisted": True,
+            "credentials_exposed": False,
             "next_gate": "ALLOWLIST_AND_PRODUCTION_ASSURANCE",
         }))
         response.delete_cookie("snap_oauth_flow", path="/auth/callback")
@@ -847,13 +847,13 @@ def token_status():
             "ok": True,
             "persisted": status["persisted"],
             "connected": status["connected"],
-            "access_token_present": status["access_present"],
-            "refresh_token_present": status["refresh_present"],
+            "access_credential_present": status["access_present"],
+            "refresh_credential_present": status["refresh_credential_present"],
             "expires_at": status["expires_at"],
             "scope": status["scope"],
             "profile_id": status["profile_id"],
             "username": status["username"],
-            "tokens_exposed": False,
+            "credentials_exposed": False,
         })
     except Exception:
         return jsonify({"ok": False, "error": "token_status_failed"}), 503
