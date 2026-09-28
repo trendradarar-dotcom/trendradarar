@@ -18,6 +18,8 @@ _logger.propagate = False
 _ALLOWED_FIELDS = {
     "correlation_id",
     "publication_id",
+    "content_id",
+    "job_id",
     "profile_id",
     "remote_media_id",
     "remote_spotlight_id",
@@ -28,6 +30,7 @@ _ALLOWED_FIELDS = {
     "attempt_count",
     "external_publication_side_effect",
     "oauth_scope",
+    "authorization_decision",
     "username",
 }
 
