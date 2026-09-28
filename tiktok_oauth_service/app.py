@@ -3,6 +3,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from http.cookies import SimpleCookie
 from pathlib import Path
 
+from durable_state import DurableState, DurableStateError
+
 AUTH_URL="https://www.tiktok.com/v2/auth/authorize/"
 TOKEN_URL="https://open.tiktokapis.com/v2/oauth/token/"
 CREATOR_INFO_URL="https://open.tiktokapis.com/v2/post/publish/creator_info/query/"
@@ -15,10 +17,33 @@ SESSION_TTL=86400
 MAX_UPLOAD_BYTES=100*1024*1024
 DEMO_B64_PATH=Path(__file__).with_name("demo_video.b64")
 
-_STATES={}
-_SESSIONS={}
-_HANDOFFS={}
-_LOCK=threading.Lock()
+_STORE=None
+_STORE_ERROR=""
+_STORE_LOCK=threading.Lock()
+
+def state_store():
+    global _STORE,_STORE_ERROR
+    if _STORE is not None:
+        return _STORE
+    with _STORE_LOCK:
+        if _STORE is not None:
+            return _STORE
+        try:
+            _STORE=DurableState.from_env()
+            _STORE_ERROR=""
+        except Exception as exc:
+            _STORE_ERROR=exc.__class__.__name__
+            return None
+    return _STORE
+
+def durable_ready():
+    store=state_store()
+    if store is None:
+        return False
+    try:
+        return bool(store.health().get("ok"))
+    except Exception:
+        return False
 
 def cfg(name):
     return str(os.environ.get(name,"")).strip()
@@ -90,17 +115,13 @@ def mp4_duration_seconds(blob):
         return 0.0
 
 def clean_stores():
-    now=int(time.time())
-    with _LOCK:
-        for k,v in list(_STATES.items()):
-            if now-int(v.get("ts",0))>STATE_TTL:
-                _STATES.pop(k,None)
-        for sid,v in list(_SESSIONS.items()):
-            if now-int(v.get("updated_at",0))>SESSION_TTL:
-                _SESSIONS.pop(sid,None)
-        for token,v in list(_HANDOFFS.items()):
-            if now-int(v.get("ts",0))>STATE_TTL:
-                _HANDOFFS.pop(token,None)
+    store=state_store()
+    if store is None:
+        return
+    try:
+        store.cleanup()
+    except Exception:
+        return
 
 def page(title,body,extra_script=""):
     return f"""<!doctype html>
@@ -175,10 +196,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def get_session(self):
         sid=self.cookie_sid()
-        if not sid: return "",None
-        with _LOCK:
-            sess=_SESSIONS.get(sid)
-            if sess: sess["updated_at"]=int(time.time())
+        if not sid:
+            return "",None
+        store=state_store()
+        if store is None:
+            return sid,None
+        try:
+            sess=store.get_session(sid,ttl=SESSION_TTL)
+        except DurableStateError:
+            return sid,None
         return sid,sess
 
     def set_cookie_header(self,sid):
@@ -207,7 +233,14 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_html(200,page("Trend Radar · Share to TikTok",body))
 
         if p.path=="/health":
-            return self.js(200,{"ok":True,"configured":configured(),"ui":"creator_facing_v3","audit_approved":audit_approved(),"scopes":cfg("TIKTOK_SCOPES") or DEFAULT_SCOPES})
+            return self.js(200,{
+                "ok":True,
+                "configured":configured(),
+                "durable_state_ready":durable_ready(),
+                "ui":"creator_facing_v3",
+                "audit_approved":audit_approved(),
+                "scopes":cfg("TIKTOK_SCOPES") or DEFAULT_SCOPES,
+            })
 
         if p.path=="/privacy":
             body="""<div class="card"><h1>سياسة خصوصية تكامل TikTok</h1>
@@ -288,17 +321,20 @@ class Handler(BaseHTTPRequestHandler):
         q=q or {}
         if not configured():
             return self.send_html(503,page("Configuration required","<div class='card'><h1>الخدمة غير مهيأة</h1></div>"))
+        store=state_store()
+        if store is None:
+            return self.send_html(503,page("Durable state required","<div class='card'><h1>التخزين الآمن الدائم غير مهيأ</h1></div>"))
         sid=self.cookie_sid() or secrets.token_urlsafe(24)
         csrf=secrets.token_urlsafe(24)
         now=int(time.time())
-        with _LOCK:
-            sess=_SESSIONS.get(sid) or {}
-            sess.update({"csrf":csrf,"updated_at":now})
-            _SESSIONS[sid]=sess
-            state=secrets.token_urlsafe(32)
-            requested_next=q.get("next",["/share"])[0]
-            next_path="/private-test" if requested_next=="/private-test" else "/share"
-            _STATES[state]={"sid":sid,"ts":now,"next_path":next_path}
+        state=secrets.token_urlsafe(32)
+        requested_next=q.get("next",["/share"])[0]
+        next_path="/private-test" if requested_next=="/private-test" else "/share"
+        try:
+            store.patch_session(sid,{"csrf":csrf},now=now,ttl=SESSION_TTL)
+            store.create_oauth_state(state,sid,next_path,now=now,ttl=STATE_TTL)
+        except DurableStateError:
+            return self.send_html(503,page("Durable state failed","<div class='card'><h1>تعذر إنشاء حالة تفويض آمنة</h1></div>"))
         params={
             "client_key":cfg("TIKTOK_CLIENT_KEY"),
             "response_type":"code",
@@ -313,8 +349,13 @@ class Handler(BaseHTTPRequestHandler):
         if q.get("error"):
             return self.send_html(400,page("Authorization failed","<div class='card'><h1>تعذر التفويض</h1><p>ألغى المستخدم العملية أو رفض TikTok الطلب.</p></div>"))
         state=q.get("state",[""])[0]; code=q.get("code",[""])[0]; now=int(time.time())
-        with _LOCK:
-            item=_STATES.pop(state,None) if state else None
+        store=state_store()
+        if store is None:
+            return self.send_html(503,page("Durable state required","<div class='card'><h1>التخزين الآمن الدائم غير متاح</h1></div>"))
+        try:
+            item=store.consume_oauth_state(state,now=now) if state else None
+        except DurableStateError:
+            item=None
         if not item or now-int(item.get("ts",0))>STATE_TTL:
             return self.send_html(400,page("Invalid state","<div class='card'><h1>جلسة التفويض غير صالحة</h1><a class='btn' href='/auth/tiktok/start'>ابدأ من جديد</a></div>"))
         sid=item["sid"]
@@ -341,27 +382,34 @@ class Handler(BaseHTTPRequestHandler):
         exp=int(payload.get("expires_in",0) or 0)
         if not access or not refresh or not open_id or exp<=0:
             return self.send_html(502,page("Incomplete token","<div class='card'><h1>استجابة TikTok غير مكتملة</h1></div>"))
-        with _LOCK:
-            sess=_SESSIONS.get(sid) or {"csrf":secrets.token_urlsafe(24)}
-            sess.update({
+        try:
+            store.patch_session(sid,{
                 "access_token":access,"refresh_token":refresh,"open_id":open_id,
-                "scope":scope,"expires_at":now+exp,"updated_at":now,
+                "scope":scope,"expires_at":now+exp,
                 "access_token_sha256":fingerprint(access),"refresh_token_sha256":fingerprint(refresh),
-            })
-            _SESSIONS[sid]=sess
+            },now=now,ttl=SESSION_TTL)
+        except DurableStateError:
+            return self.send_html(503,page("Durable state failed","<div class='card'><h1>تعذر حفظ جلسة TikTok بأمان</h1></div>"))
         public_base=cfg("PUBLIC_BASE_URL").rstrip("/")
         if public_base:
             handoff=secrets.token_urlsafe(32)
-            with _LOCK:
-                _HANDOFFS[handoff]={"sid":sid,"ts":int(time.time()),"next_path":next_path}
+            try:
+                store.create_handoff(handoff,sid,next_path,now=int(time.time()),ttl=STATE_TTL)
+            except DurableStateError:
+                return self.send_html(503,page("Durable state failed","<div class='card'><h1>تعذر إنشاء handoff آمن</h1></div>"))
             target=public_base+"/auth/tiktok/resume?handoff="+urllib.parse.quote(handoff,safe="")
             return self.redirect(target)
         return self.redirect(next_path,self.set_cookie_header(sid))
 
     def resume_handoff(self,q):
         token=q.get("handoff",[""])[0]
-        with _LOCK:
-            item=_HANDOFFS.pop(token,None) if token else None
+        store=state_store()
+        if store is None:
+            return self.send_html(503,page("Durable state required","<div class='card'><h1>التخزين الآمن الدائم غير متاح</h1></div>"))
+        try:
+            item=store.consume_handoff(token) if token else None
+        except DurableStateError:
+            item=None
         if not item or int(time.time())-int(item.get("ts",0))>STATE_TTL:
             return self.send_html(400,page("Invalid handoff","<div class='card'><h1>جلسة الرجوع غير صالحة</h1><a class='btn' href='/auth/tiktok/start'>ابدأ من جديد</a></div>"))
         sid=item["sid"]
@@ -376,8 +424,13 @@ class Handler(BaseHTTPRequestHandler):
         if not ok:
             code=html.escape(str(err.get("code") or status))
             return self.send_html(502,page("Creator info failed",f"<div class='card'><h1>تعذر قراءة إعدادات TikTok</h1><p class='danger'>{code}</p></div>"))
-        with _LOCK:
-            sess["creator_info"]=data; sess["updated_at"]=int(time.time())
+        store=state_store()
+        if store is None:
+            return self.send_html(503,page("Durable state required","<div class='card'><h1>التخزين الآمن الدائم غير متاح</h1></div>"))
+        try:
+            store.patch_session(sid,{"creator_info":data},ttl=SESSION_TTL)
+        except DurableStateError:
+            return self.send_html(503,page("Durable state failed","<div class='card'><h1>تعذر حفظ حالة الحساب</h1></div>"))
         nickname=html.escape(str(data.get("creator_nickname") or data.get("creator_username") or "TikTok creator"))
         username=html.escape(str(data.get("creator_username") or ""))
         avatar=html.escape(str(data.get("creator_avatar_url") or ""))
@@ -592,9 +645,13 @@ async function poll(id,s){{
         if not (200<=upload_status<300):
             return self.js(502,{"error":"binary_upload_failed","http_status":upload_status})
 
-        with _LOCK:
-            sess["last_publish_id"]=publish_id
-            sess["updated_at"]=int(time.time())
+        store=state_store()
+        if store is None:
+            return self.js(503,{"error":"durable_state_required"})
+        try:
+            store.patch_session(sid,{"last_publish_id":publish_id},ttl=SESSION_TTL)
+        except DurableStateError:
+            return self.js(503,{"error":"durable_state_failed"})
 
         target="/private-test?publish_id="+urllib.parse.quote(publish_id,safe="")
         return self.redirect(target)
@@ -693,8 +750,13 @@ async function poll(id,s){{
         print(f"POST_STAGE upload_result http={upload_status}", flush=True)
         if not (200<=upload_status<300):
             return self.js(502,{"error":"binary_upload_failed","http_status":upload_status})
-        with _LOCK:
-            sess["last_publish_id"]=publish_id; sess["updated_at"]=int(time.time())
+        store=state_store()
+        if store is None:
+            return self.js(503,{"error":"durable_state_required"})
+        try:
+            store.patch_session(sid,{"last_publish_id":publish_id},ttl=SESSION_TTL)
+        except DurableStateError:
+            return self.js(503,{"error":"durable_state_failed"})
         return self.js(201,{"ok":True,"publish_id":publish_id,"privacy_requested":privacy,"public_client_approved":approved})
 
     def upload_draft(self,p):
@@ -757,8 +819,13 @@ async function poll(id,s){{
         print(f"DRAFT_STAGE upload_http={upload_status}", flush=True)
         if not (200<=upload_status<300):
             return self.js(502,{"error":"binary_upload_failed","http_status":upload_status})
-        with _LOCK:
-            sess["last_draft_publish_id"]=publish_id; sess["updated_at"]=int(time.time())
+        store=state_store()
+        if store is None:
+            return self.js(503,{"error":"durable_state_required"})
+        try:
+            store.patch_session(sid,{"last_draft_publish_id":publish_id},ttl=SESSION_TTL)
+        except DurableStateError:
+            return self.js(503,{"error":"durable_state_failed"})
         return self.js(201,{"ok":True,"publish_id":publish_id,"mode":"draft_to_tiktok_inbox"})
 
     def status_api(self,q):
