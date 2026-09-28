@@ -145,6 +145,19 @@ class DurableState:
                     FOREIGN KEY(idempotency_key) REFERENCES publications(idempotency_key)
                 )"""
             )
+            con.execute(
+                """CREATE TABLE IF NOT EXISTS audit_events(
+                    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    occurred_at INTEGER NOT NULL,
+                    event_type TEXT NOT NULL,
+                    idempotency_key TEXT,
+                    account_hash TEXT,
+                    operation TEXT,
+                    decision TEXT,
+                    state TEXT,
+                    detail_json TEXT NOT NULL DEFAULT '{}'
+                )"""
+            )
             con.execute("CREATE INDEX IF NOT EXISTS idx_oauth_states_exp ON oauth_states(expires_at)")
             con.execute("CREATE INDEX IF NOT EXISTS idx_sessions_exp ON sessions(expires_at)")
             con.execute("CREATE INDEX IF NOT EXISTS idx_handoffs_exp ON handoffs(expires_at)")
@@ -152,6 +165,8 @@ class DurableState:
             con.execute("CREATE INDEX IF NOT EXISTS idx_publications_account ON publications(account_hash,updated_at)")
             con.execute("CREATE INDEX IF NOT EXISTS idx_mutation_events_time ON mutation_events(created_at)")
             con.execute("CREATE INDEX IF NOT EXISTS idx_mutation_events_account_time ON mutation_events(account_hash,created_at)")
+            con.execute("CREATE INDEX IF NOT EXISTS idx_audit_events_time ON audit_events(occurred_at)")
+            con.execute("CREATE INDEX IF NOT EXISTS idx_audit_events_idem ON audit_events(idempotency_key,occurred_at)")
 
     def _encrypt_json(self, payload):
         raw = json.dumps(payload, separators=(",", ":"), sort_keys=True, ensure_ascii=False).encode("utf-8")
@@ -336,6 +351,12 @@ class DurableState:
                 ) VALUES(?,?,?,?,?,?,?,?)""",
                 (idempotency_key,content_sha256,account_hash,operation,metadata_sha256,"RECEIVED",now,now),
             )
+            con.execute(
+                """INSERT INTO audit_events(
+                    occurred_at,event_type,idempotency_key,account_hash,operation,decision,state,detail_json
+                ) VALUES(?,?,?,?,?,?,?,?)""",
+                (now,"PUBLICATION_INTENT_CREATED",idempotency_key,account_hash,operation,"ADMIT_PENDING","RECEIVED","{}"),
+            )
             row = con.execute("SELECT * FROM publications WHERE idempotency_key=?", (idempotency_key,)).fetchone()
             con.execute("COMMIT")
             return dict(row), True
@@ -352,10 +373,22 @@ class DurableState:
             row = con.execute("SELECT * FROM publications WHERE provider_publish_id=?", (provider_publish_id,)).fetchone()
             return dict(row) if row else None
 
-    def admit_publication(self, idempotency_key, max_per_hour, max_per_day, max_active_per_account, max_active_global, now=None):
+    def admit_publication(
+        self,
+        idempotency_key,
+        max_per_hour,
+        max_per_day,
+        max_active_per_account,
+        max_active_global,
+        max_global_per_hour=None,
+        max_global_per_day=None,
+        now=None,
+    ):
         now = int(time.time() if now is None else now)
         limits = [int(max_per_hour),int(max_per_day),int(max_active_per_account),int(max_active_global)]
-        if any(v <= 0 for v in limits):
+        global_hour = int(max_global_per_hour) if max_global_per_hour is not None else None
+        global_day = int(max_global_per_day) if max_global_per_day is not None else None
+        if any(v <= 0 for v in limits) or (global_hour is not None and global_hour <= 0) or (global_day is not None and global_day <= 0):
             raise DurableStateError("publication hard limits must be positive")
         active_states = ("VALIDATED","SAFETY_APPROVED","PUBLISH_REQUESTED","UPLOAD_STARTED","UPLOADED","PROCESSING","UNKNOWN")
         with self._lock, closing(self._connect()) as con:
@@ -376,6 +409,14 @@ class DurableState:
                 "SELECT COUNT(*) FROM mutation_events WHERE account_hash=? AND created_at>?",
                 (account_hash, now-86400),
             ).fetchone()[0])
+            global_hour_count = int(con.execute(
+                "SELECT COUNT(*) FROM mutation_events WHERE created_at>?",
+                (now-3600,),
+            ).fetchone()[0])
+            global_day_count = int(con.execute(
+                "SELECT COUNT(*) FROM mutation_events WHERE created_at>?",
+                (now-86400,),
+            ).fetchone()[0])
             ph = ",".join("?" for _ in active_states)
             active_account = int(con.execute(
                 f"SELECT COUNT(*) FROM publications WHERE account_hash=? AND idempotency_key<>? AND state IN ({ph})",
@@ -390,6 +431,10 @@ class DurableState:
                 reason = "hourly_account_limit"
             elif day_count >= limits[1]:
                 reason = "daily_account_limit"
+            elif global_hour is not None and global_hour_count >= global_hour:
+                reason = "hourly_global_limit"
+            elif global_day is not None and global_day_count >= global_day:
+                reason = "daily_global_limit"
             elif active_account >= limits[2]:
                 reason = "active_account_limit"
             elif active_global >= limits[3]:
@@ -398,6 +443,13 @@ class DurableState:
                 con.execute(
                     "UPDATE publications SET state='FAILED',last_error_code=?,updated_at=? WHERE idempotency_key=?",
                     (reason,now,idempotency_key),
+                )
+                con.execute(
+                    """INSERT INTO audit_events(
+                        occurred_at,event_type,idempotency_key,account_hash,operation,decision,state,detail_json
+                    ) VALUES(?,?,?,?,?,?,?,?)""",
+                    (now,"PUBLICATION_ADMISSION",idempotency_key,account_hash,str(row["operation"]),"BLOCK","FAILED",
+                     json.dumps({"reason":reason},separators=(",",":"),sort_keys=True)),
                 )
                 con.execute("COMMIT")
                 return False, reason
@@ -408,6 +460,12 @@ class DurableState:
             con.execute(
                 "UPDATE publications SET state='VALIDATED',updated_at=? WHERE idempotency_key=?",
                 (now,idempotency_key),
+            )
+            con.execute(
+                """INSERT INTO audit_events(
+                    occurred_at,event_type,idempotency_key,account_hash,operation,decision,state,detail_json
+                ) VALUES(?,?,?,?,?,?,?,?)""",
+                (now,"PUBLICATION_ADMISSION",idempotency_key,account_hash,str(row["operation"]),"ALLOW","VALIDATED","{}"),
             )
             con.execute("COMMIT")
             return True, None
@@ -432,6 +490,14 @@ class DurableState:
                    SET state=?,provider_publish_id=?,last_error_code=?,updated_at=?
                    WHERE idempotency_key=?""",
                 (new_state,provider,error_code,now,idempotency_key),
+            )
+            con.execute(
+                """INSERT INTO audit_events(
+                    occurred_at,event_type,idempotency_key,account_hash,operation,decision,state,detail_json
+                ) VALUES(?,?,?,?,?,?,?,?)""",
+                (now,"PUBLICATION_STATE",idempotency_key,str(row["account_hash"]),str(row["operation"]),
+                 "TRANSITION",new_state,
+                 json.dumps({"from":current,"error_code":error_code},separators=(",",":"),sort_keys=True)),
             )
             updated = con.execute("SELECT * FROM publications WHERE idempotency_key=?", (idempotency_key,)).fetchone()
             con.execute("COMMIT")
@@ -463,6 +529,49 @@ class DurableState:
             con.execute("DELETE FROM oauth_states WHERE expires_at<=? OR consumed_at IS NOT NULL", (now,))
             con.execute("DELETE FROM handoffs WHERE expires_at<=? OR consumed_at IS NOT NULL", (now,))
             con.execute("DELETE FROM sessions WHERE expires_at<=?", (now,))
+
+    def record_audit_event(
+        self,
+        event_type,
+        occurred_at=None,
+        idempotency_key=None,
+        account_hash=None,
+        operation=None,
+        decision=None,
+        state=None,
+        detail=None,
+    ):
+        occurred_at = int(time.time() if occurred_at is None else occurred_at)
+        safe_detail = detail if isinstance(detail, dict) else {}
+        encoded = json.dumps(safe_detail,separators=(",",":"),sort_keys=True,ensure_ascii=False)
+        forbidden = ("access_token","refresh_token","client_secret","authorization_code")
+        lowered = encoded.lower()
+        if any(name in lowered for name in forbidden):
+            raise DurableStateError("sensitive audit detail rejected")
+        with self._lock, closing(self._connect()) as con:
+            cur = con.execute(
+                """INSERT INTO audit_events(
+                    occurred_at,event_type,idempotency_key,account_hash,operation,decision,state,detail_json
+                ) VALUES(?,?,?,?,?,?,?,?)""",
+                (
+                    occurred_at,str(event_type),idempotency_key,account_hash,operation,decision,state,encoded,
+                ),
+            )
+            return int(cur.lastrowid)
+
+    def list_audit_events(self, idempotency_key=None, limit=100):
+        limit = max(1,min(int(limit),1000))
+        with self._lock, closing(self._connect()) as con:
+            if idempotency_key is None:
+                rows = con.execute(
+                    "SELECT * FROM audit_events ORDER BY event_id DESC LIMIT ?",(limit,)
+                ).fetchall()
+            else:
+                rows = con.execute(
+                    "SELECT * FROM audit_events WHERE idempotency_key=? ORDER BY event_id ASC LIMIT ?",
+                    (idempotency_key,limit),
+                ).fetchall()
+            return [dict(r) for r in rows]
 
     def backup_to(self, destination_path):
         destination = Path(str(destination_path or "")).expanduser()
