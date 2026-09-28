@@ -1,4 +1,10 @@
+import io
 import struct
+
+try:
+    import av
+except Exception:  # fail closed at validation time if decoder is unavailable
+    av = None
 
 
 class MediaValidationError(ValueError):
@@ -103,6 +109,50 @@ def _scan_for_video_sample_entry(buf, start, end):
     return found
 
 
+def _decode_probe_h264(blob):
+    if av is None:
+        raise MediaValidationError("decoder_unavailable")
+    try:
+        container = av.open(io.BytesIO(bytes(blob)), mode="r", format="mp4")
+    except Exception as exc:
+        raise MediaValidationError("decoder_open_failed") from exc
+    try:
+        video_streams = list(container.streams.video)
+        if not video_streams:
+            raise MediaValidationError("video_stream_required")
+        stream = video_streams[0]
+        codec_name = str(getattr(stream.codec_context, "name", "") or "").lower()
+        if codec_name != "h264":
+            raise MediaValidationError("h264_decoder_required")
+        width = int(getattr(stream.codec_context, "width", 0) or 0)
+        height = int(getattr(stream.codec_context, "height", 0) or 0)
+        decoded = None
+        try:
+            for frame in container.decode(video=stream.index):
+                decoded = frame
+                break
+        except Exception as exc:
+            raise MediaValidationError("h264_decode_failed") from exc
+        if decoded is None:
+            raise MediaValidationError("h264_frame_required")
+        frame_width = int(getattr(decoded, "width", 0) or 0)
+        frame_height = int(getattr(decoded, "height", 0) or 0)
+        if frame_width <= 0 or frame_height <= 0:
+            raise MediaValidationError("decoded_dimensions_invalid")
+        if width and height and (frame_width != width or frame_height != height):
+            raise MediaValidationError("decoded_dimensions_mismatch")
+        return {
+            "codec": codec_name,
+            "width": frame_width,
+            "height": frame_height,
+        }
+    finally:
+        try:
+            container.close()
+        except Exception:
+            pass
+
+
 def validate_mp4(blob, max_bytes, max_duration_sec=None):
     if not isinstance(blob, (bytes, bytearray)) or not blob:
         raise MediaValidationError("empty_media")
@@ -133,6 +183,10 @@ def validate_mp4(blob, max_bytes, max_duration_sec=None):
     # independently tested HEVC path is explicitly admitted.
     if not ({"avc1", "avc3"} & codecs):
         raise MediaValidationError("h264_required")
+
+    decoded = _decode_probe_h264(blob)
+    if decoded["width"] != width or decoded["height"] != height:
+        raise MediaValidationError("track_and_decoder_dimensions_mismatch")
 
     # Parse mvhd duration.
     mvhd = _find_child(blob, moov[0], moov[1], moov[2], b"mvhd")
