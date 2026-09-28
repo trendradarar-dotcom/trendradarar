@@ -40,9 +40,20 @@ class DurableStateTests(unittest.TestCase):
         with open(self.db, "rb") as f:
             raw = f.read()
         self.assertNotIn(b"oauth-state-secret", raw)
-        first = self.store.consume_oauth_state("oauth-state-secret", now=2001)
+        first = self.store.consume_oauth_state("oauth-state-secret", "sid-secret", now=2001)
         self.assertEqual(first["sid"], "sid-secret")
-        self.assertIsNone(self.store.consume_oauth_state("oauth-state-secret", now=2002))
+        self.assertIsNone(self.store.consume_oauth_state("oauth-state-secret", "sid-secret", now=2002))
+
+    def test_oauth_state_browser_mismatch_does_not_consume_legitimate_state(self):
+        self.store.create_oauth_state("state-bound", "legit-sid", "/share", now=2500, ttl=60)
+        self.assertIsNone(
+            self.store.consume_oauth_state("state-bound", "attacker-sid", now=2501)
+        )
+        legit = self.store.consume_oauth_state("state-bound", "legit-sid", now=2502)
+        self.assertEqual(legit["sid"], "legit-sid")
+        self.assertIsNone(
+            self.store.consume_oauth_state("state-bound", "legit-sid", now=2503)
+        )
 
     def test_handoff_is_one_time_and_not_plaintext(self):
         self.store.create_handoff("handoff-secret", "sid-secret", "/share", now=3000, ttl=60)
@@ -58,7 +69,7 @@ class DurableStateTests(unittest.TestCase):
         self.store.upsert_session("sid", {"access_token": "x"}, now=10, ttl=2)
         self.store.create_oauth_state("state", "sid", "/share", now=10, ttl=2)
         self.assertIsNone(self.store.get_session("sid", now=12, touch=False))
-        self.assertIsNone(self.store.consume_oauth_state("state", now=12))
+        self.assertIsNone(self.store.consume_oauth_state("state", "sid", now=12))
 
     def test_key_rotation_can_read_old_ciphertext(self):
         self.store.upsert_session("sid", {"access_token": "old"}, now=1, ttl=100)
