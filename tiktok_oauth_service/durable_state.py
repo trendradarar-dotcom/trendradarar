@@ -559,6 +559,32 @@ class DurableState:
             )
             return int(cur.lastrowid)
 
+    def publication_health(self, now=None, stale_processing_seconds=900):
+        now = int(time.time() if now is None else now)
+        stale_processing_seconds = max(60, int(stale_processing_seconds))
+        with self._lock, closing(self._connect()) as con:
+            rows = con.execute(
+                "SELECT state,COUNT(*) AS n FROM publications GROUP BY state"
+            ).fetchall()
+            counts = {str(r["state"]): int(r["n"]) for r in rows}
+            stale = int(con.execute(
+                """SELECT COUNT(*) FROM publications
+                   WHERE state IN ('PUBLISH_REQUESTED','UPLOAD_STARTED','UPLOADED','PROCESSING')
+                     AND updated_at<=?""",
+                (now-stale_processing_seconds,),
+            ).fetchone()[0])
+            unknown = int(counts.get("UNKNOWN",0))
+            active = sum(int(counts.get(state,0)) for state in (
+                "VALIDATED","SAFETY_APPROVED","PUBLISH_REQUESTED","UPLOAD_STARTED","UPLOADED","PROCESSING","UNKNOWN"
+            ))
+            return {
+                "counts": counts,
+                "unknown_count": unknown,
+                "stale_nonterminal_count": stale,
+                "active_count": active,
+                "attention_required": bool(unknown or stale),
+            }
+
     def list_audit_events(self, idempotency_key=None, limit=100):
         limit = max(1,min(int(limit),1000))
         with self._lock, closing(self._connect()) as con:
