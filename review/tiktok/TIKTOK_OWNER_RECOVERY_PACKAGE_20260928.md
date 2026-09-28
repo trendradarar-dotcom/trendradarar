@@ -6,7 +6,7 @@ Repository: trendradarar-dotcom/trendradarar
 Verified live service branch before remediation: tiktok-oauth-service
 Verified live service commit before remediation: a421e755c31bf8e00a2cffc047db2c7d9e70bcbe
 Remediation branch: tiktok-runtime-reliability-remediation-20260928
-Status: REMEDIATION / INDEPENDENT RETEST NOT YET COMPLETE
+Status: POST-R3 / R4 PRE-QUALIFICATION REMEDIATION — NOT PRODUCTION AUTHORIZED
 
 ## 1. Ownership map
 
@@ -237,7 +237,7 @@ For known `provider_publish_id`:
 Current status:
 `GOLDEN_RELEASE = NOT YET ACCEPTED`
 
-R2 was independently exact-target verified but final acceptance remained FAIL-CLOSED because required adversarial evidence and production recovery gates were incomplete. Any later remediation candidate must receive a new exact commit/tree and independent retest.
+R3 was independently exact-target verified and its adversarial retest passed, closing F-01 through F-05 within the reviewed scope. Final production acceptance remained NOT VERIFIED because production persistence/recovery/alerting/cold-takeover gates were not closed. R4 pre-qualification later found a local watchdog false-negative and documentation inconsistency; those R4 findings require a new exact candidate and independent retest.
 
 The independently accepted exact remediation commit will become the Golden Release only after:
 - all critical tests close;
@@ -291,8 +291,9 @@ Prepared producer tooling:
   - cleans up the qualification marker.
 - `tools/tiktok_ops_watchdog.py`
   - consumes secret-free `/ops/health`;
-  - treats unreachable/degraded/UNKNOWN/stale conditions as attention-required;
+  - independently treats every non-2xx response, malformed/incomplete health schema, UNKNOWN count > 0, stale nonterminal count > 0, source-degraded state, or unreachable health endpoint as attention-required;
   - sends an HMAC-SHA256 signed JSON alert to an HTTPS webhook;
+  - fails closed when required health fields/counts are missing or invalid;
   - does not include OAuth/client secrets in the alert payload.
 
 These tools are qualification aids only. They do not prove production persistence or external alert delivery until exercised independently against the deployed production architecture.
@@ -308,3 +309,25 @@ No dedicated TikTok production database is currently evidenced.
 Existing data stores belonging to any non-TikTok channel/project are OUT OF SCOPE and MUST NOT be reused for TikTok state, backup, recovery, or alert deduplication.
 
 Any future TikTok state backend must be dedicated to the TikTok integration or explicitly partitioned and independently reviewed as TikTok-owned infrastructure.
+
+
+## 21. R4 independent pre-qualification result
+
+Independent R4 result:
+- Exact Target = PASS
+- R3 Regression = PASS
+- Recovery Qualification Tooling = PASS
+- Alert Watchdog Tooling = FAIL
+- Documentation Completeness = FAIL
+- Independent Architecture Pre-Review = FAIL
+- Cold Engineer Handover = NOT VERIFIED
+- Production Persistence / Backup / External Alert Delivery / Golden Recovery / Owner Takeover = NOT VERIFIED
+- Final Production Auto-Publish = NOT AUTHORIZED
+
+R4's local watchdog finding was:
+- `unknown_count > 0` could be ignored if source flags incorrectly said healthy;
+- `stale_nonterminal_count > 0` could be ignored;
+- HTTP 404/429 with valid JSON could avoid alerting;
+- incomplete 2xx health schema could be treated too optimistically.
+
+The post-R4 remediation branch changes the watchdog to make these conditions fail closed and adds direct adversarial tests. This document does NOT self-close R4-02 or R4-03; independent retest is still required.
