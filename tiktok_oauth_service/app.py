@@ -404,6 +404,38 @@ class Handler(BaseHTTPRequestHandler):
                 "scopes":cfg("TIKTOK_SCOPES") or DEFAULT_SCOPES,
             })
 
+        if p.path=="/ops/health":
+            store=state_store()
+            if store is None:
+                return self.js(503,{
+                    "ok":False,
+                    "durable_state_ready":False,
+                    "attention_required":True,
+                    "reason":"durable_state_unavailable",
+                })
+            try:
+                snapshot=store.publication_health(
+                    stale_processing_seconds=cfg_int("TIKTOK_STALE_PROCESSING_SECONDS",900)
+                )
+            except DurableStateError:
+                return self.js(503,{
+                    "ok":False,
+                    "durable_state_ready":False,
+                    "attention_required":True,
+                    "reason":"publication_health_unavailable",
+                })
+            status=503 if snapshot.get("attention_required") else 200
+            return self.js(status,{
+                "ok":status==200,
+                "durable_state_ready":True,
+                "attention_required":bool(snapshot.get("attention_required")),
+                "unknown_count":int(snapshot.get("unknown_count",0)),
+                "stale_nonterminal_count":int(snapshot.get("stale_nonterminal_count",0)),
+                "active_count":int(snapshot.get("active_count",0)),
+                "kill_switch_active":kill_switch_active(),
+                "mutations_allowed":mutations_allowed(),
+            })
+
         if p.path=="/privacy":
             body="""<div class="card"><h1>سياسة خصوصية تكامل TikTok</h1>
 <p>آخر تحديث: 22 سبتمبر 2026</p>
