@@ -203,7 +203,10 @@ class FullDecodeMediaPreflightTests(unittest.TestCase):
         self.assertEqual(error, "MEDIA_AUDIO_DECODE_FAILED")
 
     def test_truncated_tail_is_rejected(self):
-        truncated = self.valid[:-128]
+        # Remove enough of the MP4 tail to cut required terminal structure.
+        # A 128-byte cut can remove only dispensable padding for this fixture;
+        # 256 bytes deterministically produces a truncated media tail.
+        truncated = self.valid[:-256]
         verified, error = service_app._inspect_media_blob(truncated)
         self.assertIsNone(verified)
         self.assertIsNotNone(error)
