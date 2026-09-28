@@ -77,6 +77,34 @@ class ReconciliationTests(unittest.TestCase):
         self.assertEqual(status,200)
         self.assertEqual(self.store.get_publication("idem-draft")["state"],"READY")
 
+    def test_status_429_becomes_unknown_then_later_success_reconciles(self):
+        self._record("idem-429","DIRECT_POST","pub-429")
+        responses = [
+            (429,{"error":{"code":"rate_limit_exceeded"}}),
+            (200,{"data":{"status":"PUBLISH_COMPLETE"},"error":{"code":"ok"}}),
+        ]
+        app.api_json_post = lambda url, token, payload=None, timeout=25: responses.pop(0)
+        h,q = self._handler("pub-429")
+        status1,payload1 = h.status_api(q)
+        self.assertEqual(status1,429)
+        self.assertEqual(payload1["local_state"],"UNKNOWN")
+        self.assertEqual(self.store.get_publication("idem-429")["state"],"UNKNOWN")
+        status2,payload2 = h.status_api(q)
+        self.assertEqual(status2,200)
+        self.assertEqual(payload2["local_state"],"PUBLISHED")
+        self.assertEqual(self.store.get_publication("idem-429")["state"],"PUBLISHED")
+
+    def test_draft_send_to_user_inbox_becomes_ready(self):
+        self._record("idem-draft-inbox","DRAFT_UPLOAD","pub-draft-inbox")
+        app.api_json_post = lambda url, token, payload=None, timeout=25: (
+            200,{"data":{"status":"SEND_TO_USER_INBOX"},"error":{"code":"ok"}}
+        )
+        h,q = self._handler("pub-draft-inbox")
+        status,payload = h.status_api(q)
+        self.assertEqual(status,200)
+        self.assertEqual(payload["local_state"],"READY")
+        self.assertEqual(self.store.get_publication("idem-draft-inbox")["state"],"READY")
+
     def test_provider_5xx_becomes_unknown_not_success(self):
         self._record("idem-unknown","DIRECT_POST","pub-unknown")
         app.api_json_post = lambda url, token, payload=None, timeout=25: (
