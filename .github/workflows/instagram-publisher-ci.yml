@@ -5,6 +5,7 @@ on:
     branches:
       - instagram-production-remediation-20260928
       - instagram-production-remediation-r2-20260928
+      - instagram-production-remediation-r3-20260928
     paths:
       - "instagram_oauth_service/**"
       - "instagram_oauth_gateway/**"
@@ -31,7 +32,12 @@ jobs:
         run: |
           python -m pip install -r instagram_oauth_service/requirements.txt
           python -m pip install -r instagram_oauth_gateway/requirements.txt
+          python -m pip install pip-audit==2.10.1
           python -m pip check
+      - name: Audit Python dependencies
+        run: |
+          python -m pip_audit -r instagram_oauth_service/requirements.txt
+          python -m pip_audit -r instagram_oauth_gateway/requirements.txt
       - name: Compile exact Instagram sources
         run: |
           python -m py_compile instagram_oauth_service/app.py
