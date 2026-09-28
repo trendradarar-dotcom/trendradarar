@@ -192,7 +192,13 @@ def _normalize(value):
 
 
 def _snapshot(dsn):
-    snapshot = {"tables": {}, "indexes": []}
+    snapshot = {
+        "tables": {},
+        "columns": [],
+        "constraints": [],
+        "indexes": [],
+    }
+    table_names = list(TABLE_ORDER)
     with _connect(dsn) as conn:
         with conn.cursor() as cur:
             for table, order_by in TABLE_ORDER.items():
@@ -208,13 +214,62 @@ def _snapshot(dsn):
 
             cur.execute(
                 """
+                SELECT table_name,column_name,ordinal_position,data_type,udt_name,
+                       is_nullable,column_default
+                FROM information_schema.columns
+                WHERE table_schema='public'
+                  AND table_name = ANY(%s)
+                ORDER BY table_name,ordinal_position
+                """,
+                (table_names,),
+            )
+            snapshot["columns"] = [
+                {
+                    "table": row[0],
+                    "column": row[1],
+                    "ordinal_position": row[2],
+                    "data_type": row[3],
+                    "udt_name": row[4],
+                    "is_nullable": row[5],
+                    "default": row[6],
+                }
+                for row in cur.fetchall()
+            ]
+
+            cur.execute(
+                """
+                SELECT c.relname AS table_name,
+                       con.conname,
+                       con.contype,
+                       pg_get_constraintdef(con.oid, true)
+                FROM pg_constraint con
+                JOIN pg_class c ON c.oid = con.conrelid
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE n.nspname='public'
+                  AND c.relname = ANY(%s)
+                ORDER BY c.relname,con.conname
+                """,
+                (table_names,),
+            )
+            snapshot["constraints"] = [
+                {
+                    "table": row[0],
+                    "name": row[1],
+                    "type": row[2],
+                    "definition": row[3],
+                }
+                for row in cur.fetchall()
+            ]
+
+            cur.execute(
+                """
                 SELECT tablename,indexname,indexdef
                 FROM pg_indexes
                 WHERE schemaname='public'
                   AND tablename = ANY(%s)
                 ORDER BY tablename,indexname
                 """,
-                (list(TABLE_ORDER),),
+                (table_names,),
             )
             snapshot["indexes"] = [
                 {"table": row[0], "name": row[1], "definition": row[2]}
