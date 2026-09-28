@@ -18,14 +18,19 @@ from flask import Flask, Response, jsonify, redirect, request, send_file, sessio
 from publisher_runtime import IntentValidationError, PublisherRuntime
 
 APP_NAME = "Trend Radar — Instagram Reels"
-BUILD_REVISION = "M26.2-PUBLISHER-HARDENING-20260928"
+BUILD_REVISION = "M26.4-RESIDUAL-HARDENING-20260928"
 API_VERSION = os.getenv("INSTAGRAM_API_VERSION", "v26.0").strip() or "v26.0"
 APP_ID = os.getenv("INSTAGRAM_APP_ID", "").strip()
 APP_SECRET = os.getenv("INSTAGRAM_APP_SECRET", "").strip()
 REDIRECT_URI = os.getenv("INSTAGRAM_REDIRECT_URI", "").strip()
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
 SESSION_SECRET = os.getenv("SESSION_SECRET", "").strip()
-EXPECTED_USERNAME = os.getenv("INSTAGRAM_EXPECTED_USERNAME", "").strip().lstrip("@").lower()
+GOVERNED_USERNAME = "trendradarar"
+GOVERNED_PROFESSIONAL_USER_ID = "17841428134382903"
+EXPECTED_USERNAME = os.getenv("INSTAGRAM_EXPECTED_USERNAME", GOVERNED_USERNAME).strip().lstrip("@").lower()
+EXPECTED_PROFESSIONAL_USER_ID = os.getenv(
+    "INSTAGRAM_EXPECTED_PROFESSIONAL_USER_ID", GOVERNED_PROFESSIONAL_USER_ID
+).strip()
 PUBLIC_OAUTH_REDIRECT_URI = os.getenv(
     "INSTAGRAM_PUBLIC_OAUTH_REDIRECT_URI", REDIRECT_URI
 ).strip()
@@ -94,7 +99,14 @@ MEDIA_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _configured():
-    return bool(APP_ID and APP_SECRET and REDIRECT_URI and SESSION_SECRET)
+    return bool(
+        APP_ID
+        and APP_SECRET
+        and REDIRECT_URI
+        and SESSION_SECRET
+        and EXPECTED_USERNAME == GOVERNED_USERNAME
+        and EXPECTED_PROFESSIONAL_USER_ID == GOVERNED_PROFESSIONAL_USER_ID
+    )
 
 
 def _sid():
@@ -448,6 +460,7 @@ PUBLISHER = PublisherRuntime(
     load_token_record=_load_persisted_token_record,
     graph=_graph,
     expected_username=EXPECTED_USERNAME,
+    expected_professional_user_id=EXPECTED_PROFESSIONAL_USER_ID,
     publish_secret=PUBLISH_M2M_SECRET,
     public_publish_authorized=PUBLIC_PUBLISH_AUTHORIZED,
     publish_enabled=PUBLISH_ENABLED,
@@ -508,8 +521,10 @@ def _refresh_long_lived_token(rec):
     professional_user_id = profile.get("user_id")
     if EXPECTED_USERNAME and actual_username != EXPECTED_USERNAME:
         return 403, {"ok": False, "error": "INSTAGRAM_ACCOUNT_MISMATCH"}
-    if not professional_user_id or normalized_account_type not in {"BUSINESS", "MEDIA_CREATOR"}:
-        return 422, {"ok": False, "error": "INSTAGRAM_PROFESSIONAL_ACCOUNT_REQUIRED"}
+    if str(professional_user_id or "") != EXPECTED_PROFESSIONAL_USER_ID:
+        return 403, {"ok": False, "error": "INSTAGRAM_PROFESSIONAL_USER_ID_MISMATCH"}
+    if normalized_account_type != "BUSINESS":
+        return 422, {"ok": False, "error": "INSTAGRAM_BUSINESS_ACCOUNT_REQUIRED"}
 
     refreshed["username"] = profile.get("username")
     refreshed["account_type"] = account_type
@@ -529,11 +544,81 @@ def _b64url_encode(value):
     return base64.urlsafe_b64encode(value).decode("utf-8").rstrip("=")
 
 
+def _ensure_public_oauth_state_table():
+    if not DATABASE_URL:
+        return False
+    try:
+        with _db_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS instagram_oauth_state_nonces (
+                        nonce_hash TEXT PRIMARY KEY,
+                        expires_at TIMESTAMPTZ NOT NULL,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                    """
+                )
+                cur.execute("DELETE FROM instagram_oauth_state_nonces WHERE expires_at <= NOW()")
+            conn.commit()
+        return True
+    except Exception:
+        return False
+
+
+def _store_public_oauth_nonce(nonce, ttl_seconds=900):
+    if not nonce or not _ensure_public_oauth_state_table():
+        return False
+    nonce_hash = hashlib.sha256(str(nonce).encode("utf-8")).hexdigest()
+    try:
+        with _db_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO instagram_oauth_state_nonces(nonce_hash, expires_at)
+                    VALUES (%s, NOW() + (%s * INTERVAL '1 second'))
+                    ON CONFLICT DO NOTHING
+                    RETURNING nonce_hash
+                    """,
+                    (nonce_hash, int(ttl_seconds)),
+                )
+                inserted = cur.fetchone() is not None
+            conn.commit()
+        return inserted
+    except Exception:
+        return False
+
+
+def _consume_public_oauth_nonce(nonce):
+    if not nonce or not _ensure_public_oauth_state_table():
+        return False
+    nonce_hash = hashlib.sha256(str(nonce).encode("utf-8")).hexdigest()
+    try:
+        with _db_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    DELETE FROM instagram_oauth_state_nonces
+                    WHERE nonce_hash = %s AND expires_at > NOW()
+                    RETURNING nonce_hash
+                    """,
+                    (nonce_hash,),
+                )
+                consumed = cur.fetchone() is not None
+            conn.commit()
+        return consumed
+    except Exception:
+        return False
+
+
 def _make_public_oauth_state():
+    nonce = secrets.token_urlsafe(18)
+    if not _store_public_oauth_nonce(nonce):
+        return ""
     payload = {
         "aud": "trendradar-instagram-public-oauth",
         "iat": int(time.time()),
-        "nonce": secrets.token_urlsafe(18),
+        "nonce": nonce,
         "redirect_uri": PUBLIC_OAUTH_REDIRECT_URI,
     }
     encoded_payload = _b64url_encode(
@@ -568,6 +653,9 @@ def _verify_public_oauth_state(state, max_age_seconds=900):
         if payload.get("redirect_uri") != PUBLIC_OAUTH_REDIRECT_URI:
             return None
         if issued_at <= 0 or now - issued_at < 0 or now - issued_at > max_age_seconds:
+            return None
+        nonce = str(payload.get("nonce") or "")
+        if not nonce or not _consume_public_oauth_nonce(nonce):
             return None
         return payload
     except Exception:
@@ -672,17 +760,17 @@ def _complete_oauth(code, redirect_uri):
             "expected_username": EXPECTED_USERNAME,
             "actual_username": actual_username or None,
         }
-    if not professional_user_id:
-        return 502, {
+    if str(professional_user_id or "") != EXPECTED_PROFESSIONAL_USER_ID:
+        return 403, {
             "ok": False,
             "stage": "PROFILE_VERIFY",
-            "error": "MISSING_PROFESSIONAL_USER_ID",
+            "error": "INSTAGRAM_PROFESSIONAL_USER_ID_MISMATCH",
         }
-    if normalized_account_type not in {"BUSINESS", "MEDIA_CREATOR"}:
+    if normalized_account_type != "BUSINESS":
         return 422, {
             "ok": False,
             "stage": "PROFILE_VERIFY",
-            "error": "INSTAGRAM_PROFESSIONAL_ACCOUNT_REQUIRED",
+            "error": "INSTAGRAM_BUSINESS_ACCOUNT_REQUIRED",
             "account_type": account_type or None,
         }
 
@@ -819,6 +907,10 @@ def health():
             "publisher_m2m_configured": bool(PUBLISH_M2M_SECRET),
             "media_host_allowlist_configured": bool(MEDIA_HOST_ALLOWLIST),
             "publisher_control_plane_configured": PUBLISHER.configured(),
+            "exact_account_binding_configured": (
+                EXPECTED_USERNAME == GOVERNED_USERNAME
+                and EXPECTED_PROFESSIONAL_USER_ID == GOVERNED_PROFESSIONAL_USER_ID
+            ),
             "browser_public_publish_enabled": False,
             "publisher_media_spool_configured": bool(DATABASE_URL and PUBLISH_MEDIA_PUBLIC_BASE_URL),
             "publisher_media_max_bytes": PUBLISH_MEDIA_MAX_BYTES,
@@ -865,6 +957,8 @@ def public_oauth_start():
     if not _configured() or not PUBLIC_OAUTH_REDIRECT_URI:
         return jsonify({"ok": False, "error": "META_APP_NOT_CONFIGURED"}), 503
     state = _make_public_oauth_state()
+    if not state:
+        return jsonify({"ok": False, "error": "OAUTH_STATE_PERSISTENCE_UNAVAILABLE"}), 503
     params = {
         "client_id": APP_ID,
         "redirect_uri": PUBLIC_OAUTH_REDIRECT_URI,

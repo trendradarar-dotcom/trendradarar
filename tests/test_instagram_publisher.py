@@ -2,6 +2,7 @@ import importlib
 import os
 import sys
 import unittest
+from contextlib import contextmanager
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
 SERVICE_DIR = os.path.join(ROOT, "instagram_oauth_service")
@@ -38,6 +39,9 @@ def valid_intent(**overrides):
             "fps": 30,
             "video_codec": "h264",
             "audio_codec": "aac",
+            "video_bitrate_bps": 8_000_000,
+            "audio_sample_rate_hz": 48_000,
+            "audio_bitrate_bps": 128_000,
         },
     }
     payload.update(overrides)
@@ -50,6 +54,7 @@ class MemoryPublisher(PublisherRuntime):
             db_connect=lambda: None,
             load_token_record=lambda: None,
             graph=lambda *a, **k: (500, {}),
+            expected_professional_user_id="17841428134382903",
             **kwargs,
         )
         self.jobs = {}
@@ -59,7 +64,20 @@ class MemoryPublisher(PublisherRuntime):
         item = self.jobs.get(key)
         return dict(item) if item else None
 
+    def _get_job_by_content_identity(self, content_asset_id, asset_sha256):
+        for item in self.jobs.values():
+            if item.get("account_key") == self.expected_username and (
+                item.get("content_asset_id") == content_asset_id
+                or item.get("asset_sha256") == asset_sha256
+            ):
+                return dict(item)
+        return None
+
     def _insert_job(self, intent, status):
+        if intent["idempotency_key"] in self.jobs:
+            return False
+        if self._get_job_by_content_identity(intent["content_asset_id"], intent["asset_sha256"]):
+            return False
         self.jobs[intent["idempotency_key"]] = {
             **intent,
             "account_key": self.expected_username,
@@ -70,6 +88,11 @@ class MemoryPublisher(PublisherRuntime):
             "attempt_count": 0,
             "last_error_code": None,
         }
+        return True
+
+    @contextmanager
+    def _advisory_lock(self, name):
+        yield
 
     def _transition(self, key, status, **kwargs):
         self.jobs[key]["status"] = status
@@ -230,12 +253,82 @@ class PublisherContractTests(unittest.TestCase):
         self.assertEqual(status, 409)
         self.assertEqual(result["error"], "IDEMPOTENCY_CONFLICT")
 
+    def test_same_content_with_new_idempotency_key_is_blocked(self):
+        runtime = self.make_runtime(public=False)
+        runtime.start(valid_intent())
+        changed = valid_intent(
+            publication_id="pub-002",
+            idempotency_key="idem-002",
+            correlation_id="corr-002",
+        )
+        status, result = runtime.start(changed)
+        self.assertEqual(status, 409)
+        self.assertEqual(result["error"], "CONTENT_ALREADY_BOUND_TO_PUBLICATION")
+
+    def test_same_bytes_with_new_content_asset_id_is_blocked(self):
+        runtime = self.make_runtime(public=False)
+        runtime.start(valid_intent())
+        changed = valid_intent(
+            publication_id="pub-003",
+            content_asset_id="asset-003",
+            idempotency_key="idem-003",
+            correlation_id="corr-003",
+        )
+        status, result = runtime.start(changed)
+        self.assertEqual(status, 409)
+        self.assertEqual(result["error"], "CONTENT_ALREADY_BOUND_TO_PUBLICATION")
+
+    def test_meta_reel_media_limits_fail_closed(self):
+        runtime = self.make_runtime()
+        for overrides in (
+            {"media": {**valid_intent()["media"], "duration_seconds": 2}},
+            {"media": {**valid_intent()["media"], "fps": 22}},
+            {"media": {**valid_intent()["media"], "width": 1921}},
+            {"media": {**valid_intent()["media"], "video_bitrate_bps": 25_000_001}},
+            {"media": {**valid_intent()["media"], "audio_sample_rate_hz": 44_100}},
+            {"media": {**valid_intent()["media"], "audio_bitrate_bps": 128_001}},
+        ):
+            with self.subTest(overrides=overrides):
+                with self.assertRaises(IntentValidationError):
+                    runtime.validate_intent(valid_intent(**overrides))
+
+    def test_exact_professional_user_id_is_required(self):
+        runtime = PublisherRuntime(
+            db_connect=lambda: None,
+            load_token_record=lambda: {
+                "username": "trendradarar",
+                "account_type": "BUSINESS",
+                "user_id": "wrong-id",
+                "granted_permissions": [
+                    "instagram_business_basic",
+                    "instagram_business_content_publish",
+                ],
+                "access_token": "token",
+            },
+            graph=lambda *a, **k: (200, {
+                "username": "trendradarar",
+                "account_type": "BUSINESS",
+                "user_id": "wrong-id",
+            }),
+            expected_username="trendradarar",
+            expected_professional_user_id="17841428134382903",
+            publish_secret="secret",
+            public_publish_authorized=False,
+            publish_enabled=False,
+            media_host_allowlist=["media.trendradar.com.co"],
+            allowed_markets=["SA"],
+            allowed_languages=["ar"],
+        )
+        _, error = runtime._credential_gate()
+        self.assertEqual(error, "PROFESSIONAL_USER_ID_MISMATCH")
+
 
 class FlaskBoundaryTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         os.environ["SESSION_SECRET"] = "test-session-secret"
         os.environ["INSTAGRAM_EXPECTED_USERNAME"] = "trendradarar"
+        os.environ["INSTAGRAM_EXPECTED_PROFESSIONAL_USER_ID"] = "17841428134382903"
         os.environ["INSTAGRAM_PUBLIC_PUBLISH_AUTHORIZED"] = "false"
         if "app" in sys.modules:
             del sys.modules["app"]
@@ -287,6 +380,21 @@ class FlaskBoundaryTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.get_json()["error"], "INVALID_SIGNED_REQUEST")
 
+    def test_public_oauth_state_is_one_time(self):
+        issued = set()
+        original_store = self.module._store_public_oauth_nonce
+        original_consume = self.module._consume_public_oauth_nonce
+        try:
+            self.module._store_public_oauth_nonce = lambda nonce, ttl_seconds=900: (issued.add(nonce) or True)
+            self.module._consume_public_oauth_nonce = lambda nonce: (issued.remove(nonce) is None) if nonce in issued else False
+            state = self.module._make_public_oauth_state()
+            self.assertTrue(state)
+            self.assertIsNotNone(self.module._verify_public_oauth_state(state))
+            self.assertIsNone(self.module._verify_public_oauth_state(state))
+        finally:
+            self.module._store_public_oauth_nonce = original_store
+            self.module._consume_public_oauth_nonce = original_consume
+
     def test_health_keeps_public_publish_closed(self):
         response = self.client.get("/health")
         self.assertEqual(response.status_code, 200)
@@ -294,6 +402,7 @@ class FlaskBoundaryTests(unittest.TestCase):
         self.assertFalse(body["public_publish_authorized"])
         self.assertFalse(body["instagram_publish_enabled"])
         self.assertFalse(body["browser_public_publish_enabled"])
+        self.assertTrue(body["exact_account_binding_configured"])
 
 
 if __name__ == "__main__":

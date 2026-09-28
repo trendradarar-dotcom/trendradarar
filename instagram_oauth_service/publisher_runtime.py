@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import json
+from contextlib import contextmanager
 from urllib.parse import urlparse
 
 
@@ -41,6 +42,7 @@ class PublisherRuntime:
         load_token_record,
         graph,
         expected_username,
+        expected_professional_user_id,
         publish_secret,
         public_publish_authorized,
         publish_enabled,
@@ -59,6 +61,7 @@ class PublisherRuntime:
         self.load_token_record = load_token_record
         self.graph = graph
         self.expected_username = (expected_username or "").strip().lstrip("@").lower()
+        self.expected_professional_user_id = str(expected_professional_user_id or "").strip()
         self.publish_secret = publish_secret or ""
         self.public_publish_authorized = bool(public_publish_authorized)
         self.publish_enabled = bool(publish_enabled)
@@ -81,6 +84,7 @@ class PublisherRuntime:
         return bool(
             self.publish_secret
             and self.expected_username
+            and self.expected_professional_user_id
             and self.media_host_allowlist
             and self.allowed_markets
             and self.allowed_languages
@@ -161,11 +165,13 @@ class PublisherRuntime:
             raise IntentValidationError("MEDIA_METADATA_INVALID")
         if size_bytes <= 0 or size_bytes > 100 * 1024 * 1024:
             raise IntentValidationError("MEDIA_SIZE_OUT_OF_RANGE")
-        if duration_seconds < 1 or duration_seconds > 900:
+        # Meta Reels: 3s minimum, 15m maximum.
+        if duration_seconds < 3 or duration_seconds > 900:
             raise IntentValidationError("MEDIA_DURATION_OUT_OF_RANGE")
-        if width < 320 or width > 4096 or height < 320 or height > 4096:
+        # Current governed profile is H.264 MP4, narrower than Meta's H.264/HEVC allowance.
+        if width < 320 or width > 1920 or height < 320 or height > 4096:
             raise IntentValidationError("MEDIA_DIMENSIONS_OUT_OF_RANGE")
-        if fps <= 0 or fps > 60:
+        if fps < 23 or fps > 60:
             raise IntentValidationError("MEDIA_FPS_OUT_OF_RANGE")
 
         video_codec = str(media.get("video_codec") or "").strip().lower()
@@ -174,6 +180,21 @@ class PublisherRuntime:
         audio_codec = str(media.get("audio_codec") or "").strip().lower()
         if audio_codec not in {"", "none", "aac", "mp4a"}:
             raise IntentValidationError("MEDIA_AUDIO_CODEC_NOT_ALLOWED")
+        try:
+            video_bitrate_bps = int(media.get("video_bitrate_bps"))
+            audio_sample_rate_hz = int(media.get("audio_sample_rate_hz") or 0)
+            audio_bitrate_bps = int(media.get("audio_bitrate_bps") or 0)
+        except (TypeError, ValueError):
+            raise IntentValidationError("MEDIA_BITRATE_METADATA_INVALID")
+        if video_bitrate_bps <= 0 or video_bitrate_bps > 25_000_000:
+            raise IntentValidationError("MEDIA_VIDEO_BITRATE_OUT_OF_RANGE")
+        if audio_codec in {"aac", "mp4a"}:
+            if audio_sample_rate_hz != 48_000:
+                raise IntentValidationError("MEDIA_AUDIO_SAMPLE_RATE_INVALID")
+            if audio_bitrate_bps <= 0 or audio_bitrate_bps > 128_000:
+                raise IntentValidationError("MEDIA_AUDIO_BITRATE_OUT_OF_RANGE")
+        elif audio_sample_rate_hz != 0 or audio_bitrate_bps != 0:
+            raise IntentValidationError("MEDIA_AUDIO_METADATA_WITHOUT_AUDIO")
 
         market = self._safe_text(payload.get("market"), name="MARKET", max_len=16)
         language = self._safe_text(payload.get("language"), name="LANGUAGE", max_len=32)
@@ -232,6 +253,9 @@ class PublisherRuntime:
                 "fps": fps,
                 "video_codec": video_codec,
                 "audio_codec": audio_codec,
+                "video_bitrate_bps": video_bitrate_bps,
+                "audio_sample_rate_hz": audio_sample_rate_hz,
+                "audio_bitrate_bps": audio_bitrate_bps,
             },
         }
         normalized["contract_sha256"] = self._canonical_hash(normalized)
@@ -290,6 +314,20 @@ class PublisherRuntime:
                     )
                     """
                 )
+                # Strict Phase-1 duplicate prevention: the same governed asset or exact bytes
+                # cannot be reserved twice for the same Instagram account.
+                cur.execute(
+                    """
+                    CREATE UNIQUE INDEX IF NOT EXISTS instagram_publication_unique_content_asset
+                    ON instagram_publication_jobs(account_key, content_asset_id)
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE UNIQUE INDEX IF NOT EXISTS instagram_publication_unique_asset_hash
+                    ON instagram_publication_jobs(account_key, asset_sha256)
+                    """
+                )
             conn.commit()
 
     @staticmethod
@@ -327,6 +365,18 @@ class PublisherRuntime:
                 )
                 return self._row_to_job(cur.fetchone())
 
+    def _get_job_by_content_identity(self, content_asset_id, asset_sha256):
+        self._ensure_tables()
+        with self.db_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT {self._job_columns()} FROM instagram_publication_jobs "
+                    "WHERE account_key = %s AND (content_asset_id = %s OR asset_sha256 = %s) "
+                    "ORDER BY created_at ASC LIMIT 1",
+                    (self.expected_username, content_asset_id, asset_sha256),
+                )
+                return self._row_to_job(cur.fetchone())
+
     def _insert_job(self, intent, status):
         self._ensure_tables()
         with self.db_connect() as conn:
@@ -341,6 +391,8 @@ class PublisherRuntime:
                     ) VALUES (
                         %s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s,%s,%s,%s,%s,%s
                     )
+                    ON CONFLICT DO NOTHING
+                    RETURNING idempotency_key
                     """,
                     (
                         intent["idempotency_key"], intent["publication_id"],
@@ -352,8 +404,34 @@ class PublisherRuntime:
                         intent["commercial_status"], intent["is_ai_generated"], status,
                     ),
                 )
+                inserted = cur.fetchone() is not None
             conn.commit()
-        self._event(intent["idempotency_key"], "JOB_CREATED", {"status": status})
+        if inserted:
+            self._event(intent["idempotency_key"], "JOB_CREATED", {"status": status})
+        return inserted
+
+    def _reservation_conflict_response(self, intent):
+        existing = self._get_job(intent["idempotency_key"])
+        if existing:
+            if existing["contract_sha256"] == intent["contract_sha256"]:
+                return 200, self._safe_job(existing, replayed=True)
+            return 409, {"ok": False, "error": "IDEMPOTENCY_CONFLICT"}
+        existing = self._get_job_by_content_identity(
+            intent["content_asset_id"], intent["asset_sha256"]
+        )
+        if existing:
+            return 409, {
+                "ok": False,
+                "error": "CONTENT_ALREADY_BOUND_TO_PUBLICATION",
+                "existing_publication_id": existing.get("publication_id"),
+                "existing_status": existing.get("status"),
+            }
+        return 409, {"ok": False, "error": "PUBLICATION_RESERVATION_CONFLICT"}
+
+    def _reserve_job(self, intent, status):
+        if self._insert_job(intent, status):
+            return None
+        return self._reservation_conflict_response(intent)
 
     def _event(self, key, event_type, detail=None):
         self._ensure_tables()
@@ -406,7 +484,9 @@ class PublisherRuntime:
                 cur.execute(
                     """
                     SELECT COUNT(*) FROM instagram_publication_jobs
-                    WHERE status IN ('PUBLISHED','VERIFIED','PUBLISHED_UNVERIFIED')
+                    WHERE status IN (
+                        'PUBLISH_REQUESTED','UNKNOWN','PUBLISHED','VERIFIED','PUBLISHED_UNVERIFIED'
+                    )
                       AND updated_at >= NOW() - INTERVAL '24 hours'
                     """
                 )
@@ -446,16 +526,28 @@ class PublisherRuntime:
                 mutations_1m = int(cur.fetchone()[0])
         return published_24h, inflight, failures_15m, unpublished_queue, mutations_1m
 
+    @contextmanager
+    def _advisory_lock(self, name):
+        # PostgreSQL transaction advisory lock serializes cross-worker hard-limit decisions.
+        with self.db_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (str(name),))
+            try:
+                yield
+            finally:
+                conn.commit()
+
     def _provider_mutation_allowed(self, key, job):
-        if int(job.get("attempt_count") or 0) >= self.max_provider_mutations_per_job:
-            self._transition(key, "HOLD_ATTEMPT_LIMIT", error_code="MAX_PROVIDER_MUTATIONS_PER_JOB")
-            return False, "MAX_PROVIDER_MUTATIONS_PER_JOB"
-        _, _, _, _, mutations_1m = self._count_guard()
-        if mutations_1m >= self.max_api_mutations_per_minute:
-            self._transition(key, "HOLD_MUTATION_RATE", error_code="MAX_API_MUTATIONS_PER_MINUTE")
-            return False, "MAX_API_MUTATIONS_PER_MINUTE"
-        self._event(key, "PROVIDER_MUTATION", {"allowed": True})
-        return True, None
+        with self._advisory_lock("trendradar-instagram-provider-mutation"):
+            if int(job.get("attempt_count") or 0) >= self.max_provider_mutations_per_job:
+                self._transition(key, "HOLD_ATTEMPT_LIMIT", error_code="MAX_PROVIDER_MUTATIONS_PER_JOB")
+                return False, "MAX_PROVIDER_MUTATIONS_PER_JOB"
+            _, _, _, _, mutations_1m = self._count_guard()
+            if mutations_1m >= self.max_api_mutations_per_minute:
+                self._transition(key, "HOLD_MUTATION_RATE", error_code="MAX_API_MUTATIONS_PER_MINUTE")
+                return False, "MAX_API_MUTATIONS_PER_MINUTE"
+            self._event(key, "PROVIDER_MUTATION", {"allowed": True})
+            return True, None
 
     def _credential_gate(self):
         rec = self.load_token_record()
@@ -467,8 +559,10 @@ class PublisherRuntime:
         perms = {str(p) for p in (rec.get("granted_permissions") or [])}
         if username != self.expected_username:
             return None, "ACCOUNT_MISMATCH"
-        if not user_id or account_type not in {"BUSINESS", "MEDIA_CREATOR"}:
-            return None, "PROFESSIONAL_ACCOUNT_REQUIRED"
+        if not user_id or account_type != "BUSINESS":
+            return None, "BUSINESS_ACCOUNT_REQUIRED"
+        if str(user_id) != self.expected_professional_user_id:
+            return None, "PROFESSIONAL_USER_ID_MISMATCH"
         if not {"instagram_business_basic", "instagram_business_content_publish"}.issubset(perms):
             return None, "PUBLISH_PERMISSION_MISSING"
         try:
@@ -485,8 +579,10 @@ class PublisherRuntime:
         live_user_id = profile.get("user_id")
         if live_username != self.expected_username or str(live_user_id) != str(user_id):
             return None, "LIVE_ACCOUNT_BINDING_MISMATCH"
-        if live_type not in {"BUSINESS", "MEDIA_CREATOR"}:
-            return None, "LIVE_ACCOUNT_NOT_PROFESSIONAL"
+        if str(live_user_id) != self.expected_professional_user_id:
+            return None, "LIVE_PROFESSIONAL_USER_ID_MISMATCH"
+        if live_type != "BUSINESS":
+            return None, "LIVE_ACCOUNT_NOT_BUSINESS"
         return rec, None
 
     def _provider_quota_gate(self, rec):
@@ -550,20 +646,39 @@ class PublisherRuntime:
                 return 409, {"ok": False, "error": "IDEMPOTENCY_CONFLICT"}
             return 200, self._safe_job(existing, replayed=True)
 
+        existing_content = self._get_job_by_content_identity(
+            intent["content_asset_id"], intent["asset_sha256"]
+        )
+        if existing_content:
+            return 409, {
+                "ok": False,
+                "error": "CONTENT_ALREADY_BOUND_TO_PUBLICATION",
+                "existing_publication_id": existing_content.get("publication_id"),
+                "existing_status": existing_content.get("status"),
+            }
+
         if not self.public_publish_authorized:
-            self._insert_job(intent, "HOLD_PUBLIC_DISABLED")
+            conflict = self._reserve_job(intent, "HOLD_PUBLIC_DISABLED")
+            if conflict:
+                return conflict
             return 202, self._safe_job(self._get_job(intent["idempotency_key"]))
         if not self.publish_enabled:
-            self._insert_job(intent, "HOLD_KILL_SWITCH")
+            conflict = self._reserve_job(intent, "HOLD_KILL_SWITCH")
+            if conflict:
+                return conflict
             return 202, self._safe_job(self._get_job(intent["idempotency_key"]))
 
         published_24h, inflight, failures_15m, unpublished_queue, mutations_1m = self._count_guard()
         if unpublished_queue >= self.max_unpublished_queue:
-            self._insert_job(intent, "HOLD_QUEUE_LIMIT")
+            conflict = self._reserve_job(intent, "HOLD_QUEUE_LIMIT")
+            if conflict:
+                return conflict
             self._transition(intent["idempotency_key"], "HOLD_QUEUE_LIMIT", error_code="MAX_UNPUBLISHED_QUEUE")
             return 429, self._safe_job(self._get_job(intent["idempotency_key"]))
 
-        self._insert_job(intent, "NEW")
+        conflict = self._reserve_job(intent, "NEW")
+        if conflict:
+            return conflict
 
         if not self.configured():
             self._transition(intent["idempotency_key"], "HOLD_MEDIA_HOST", error_code="PUBLISHER_NOT_CONFIGURED")
@@ -680,36 +795,50 @@ class PublisherRuntime:
             job = self._get_job(key)
 
         if job["status"] == "READY":
-            if not self.public_publish_authorized:
-                self._transition(key, "HOLD_PUBLIC_DISABLED", error_code="PUBLIC_PUBLISH_DISABLED")
-                return 202, self._safe_job(self._get_job(key))
-            if not self.publish_enabled:
-                self._transition(key, "HOLD_KILL_SWITCH", error_code="PUBLISH_KILL_SWITCH_DISABLED")
-                return 202, self._safe_job(self._get_job(key))
+            # Serialize the irreversible media_publish decision across workers.
+            with self._advisory_lock("trendradar-instagram-media-publish"):
+                job = self._get_job(key)
+                if job["status"] != "READY":
+                    return 200, self._safe_job(job)
+                if not self.public_publish_authorized:
+                    self._transition(key, "HOLD_PUBLIC_DISABLED", error_code="PUBLIC_PUBLISH_DISABLED")
+                    return 202, self._safe_job(self._get_job(key))
+                if not self.publish_enabled:
+                    self._transition(key, "HOLD_KILL_SWITCH", error_code="PUBLISH_KILL_SWITCH_DISABLED")
+                    return 202, self._safe_job(self._get_job(key))
 
-            mutation_ok, _ = self._provider_mutation_allowed(key, job)
-            if not mutation_ok:
-                return 429, self._safe_job(self._get_job(key))
-            self._transition(key, "PUBLISH_REQUESTED", provider_status="REQUESTED", increment_attempt=True)
-            try:
-                http, payload = self.graph(
-                    "POST", f"{rec['user_id']}/media_publish", rec["access_token"],
-                    data={"creation_id": job["container_id"]},
-                )
-            except Exception:
-                self._transition(key, "UNKNOWN", error_code="MEDIA_PUBLISH_AMBIGUOUS")
-                return 502, self._safe_job(self._get_job(key))
+                # Potentially-public UNKNOWN/PUBLISH_REQUESTED outcomes consume daily blast radius.
+                exposure_24h, _, failures_15m, _, _ = self._count_guard()
+                if exposure_24h >= self.max_daily_publications:
+                    self._transition(key, "HOLD_BLAST_RADIUS", error_code="MAX_DAILY_PUBLICATIONS")
+                    return 429, self._safe_job(self._get_job(key))
+                if failures_15m >= self.circuit_failure_threshold:
+                    self._transition(key, "HOLD_CIRCUIT_OPEN", error_code="RECENT_FAILURE_THRESHOLD")
+                    return 503, self._safe_job(self._get_job(key))
 
-            media_id = payload.get("id") if isinstance(payload, dict) else None
-            if http >= 500:
-                self._transition(key, "UNKNOWN", error_code="MEDIA_PUBLISH_PROVIDER_5XX")
-                return 502, self._safe_job(self._get_job(key))
-            if http >= 400 or not media_id:
-                self._transition(key, "FAILED_FINAL", error_code="MEDIA_PUBLISH_REJECTED")
-                return 422, self._safe_job(self._get_job(key))
+                mutation_ok, _ = self._provider_mutation_allowed(key, job)
+                if not mutation_ok:
+                    return 429, self._safe_job(self._get_job(key))
+                self._transition(key, "PUBLISH_REQUESTED", provider_status="REQUESTED", increment_attempt=True)
+                try:
+                    http, payload = self.graph(
+                        "POST", f"{rec['user_id']}/media_publish", rec["access_token"],
+                        data={"creation_id": job["container_id"]},
+                    )
+                except Exception:
+                    self._transition(key, "UNKNOWN", error_code="MEDIA_PUBLISH_AMBIGUOUS")
+                    return 502, self._safe_job(self._get_job(key))
 
-            self._transition(key, "PUBLISHED", media_id=str(media_id), provider_status="PUBLISHED")
-            job = self._get_job(key)
+                media_id = payload.get("id") if isinstance(payload, dict) else None
+                if http >= 500:
+                    self._transition(key, "UNKNOWN", error_code="MEDIA_PUBLISH_PROVIDER_5XX")
+                    return 502, self._safe_job(self._get_job(key))
+                if http >= 400 or not media_id:
+                    self._transition(key, "FAILED_FINAL", error_code="MEDIA_PUBLISH_REJECTED")
+                    return 422, self._safe_job(self._get_job(key))
+
+                self._transition(key, "PUBLISHED", media_id=str(media_id), provider_status="PUBLISHED")
+                job = self._get_job(key)
 
         if job["status"] == "PUBLISHED":
             try:
