@@ -141,19 +141,33 @@ Filename or transient job ID does not create a new content identity.
 
 Python target used by CI: 3.12
 
-Dependency:
+Reproducible dependency authority:
+- `tiktok_oauth_service/requirements.lock`
+- install with `python -m pip install --require-hashes -r tiktok_oauth_service/requirements.lock`
+
+Pinned direct runtime packages include:
+- `av==18.1.0`
 - `cryptography==46.0.1`
+- `cffi==2.1.1`
+- `pycparser==3.0`
+
+The media validator uses PyAV/FFmpeg and decodes the entire H.264 video stream before provider mutation; first-frame-only validation is not the intended acceptance rule.
 
 CI:
-- compile app/state/tests
+- compile app/state/tests/SBOM generator
+- install hash-locked dependencies
 - run durable-state tests
 - safety-gate tests
 - backup/restore tests
 - reconciliation tests
+- media validation tests
+- concurrency tests
+- generate exact-commit CycloneDX SBOM
+- reject mutable GitHub Action version tags
 - reject legacy in-memory OAuth stores
 - preserve audit-approval gate
 
-No deployment is required to execute these unit/adversarial tests.
+No deployment is required to execute these internal tests.
 
 ## 10. Runtime start
 
@@ -213,13 +227,17 @@ For known `provider_publish_id`:
 - query TikTok status;
 - Direct Post + PUBLISH_COMPLETE -> PUBLISHED;
 - Draft + PUBLISH_COMPLETE -> READY;
-- explicit failure -> FAILED;
-- network/5xx ambiguity -> UNKNOWN.
+- Draft + SEND_TO_USER_INBOX -> READY;
+- explicit provider publication failure -> FAILED;
+- status-read/network/429/5xx ambiguity -> UNKNOWN;
+- later successful reconciliation may resolve UNKNOWN to PUBLISHED/READY.
 
 ## 16. Golden Release
 
 Current status:
-`GOLDEN_RELEASE = NOT YET FROZEN`
+`GOLDEN_RELEASE = NOT YET ACCEPTED`
+
+R2 was independently exact-target verified but final acceptance remained FAIL-CLOSED because required adversarial evidence and production recovery gates were incomplete. Any later remediation candidate must receive a new exact commit/tree and independent retest.
 
 The independently accepted exact remediation commit will become the Golden Release only after:
 - all critical tests close;
