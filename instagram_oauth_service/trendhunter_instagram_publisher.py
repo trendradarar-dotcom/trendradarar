@@ -168,9 +168,11 @@ class InstagramPublisherClient:
             "idempotency_key": manifest["idempotency_key"],
             "correlation_id": manifest["correlation_id"],
             "is_ai_generated": bool(manifest.get("is_ai_generated", True)),
-            "media": manifest["media"],
+            "media": media_result.get("verified_media") or {},
         }
 
+        if not intent["media"]:
+            raise RuntimeError("MEDIA_VERIFICATION_METADATA_MISSING")
         result = self.submit_intent(intent)
         status = result.get("status")
         if status in TERMINAL_SUCCESS:

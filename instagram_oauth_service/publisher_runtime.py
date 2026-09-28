@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 
 TERMINAL_STATUSES = {
     "VERIFIED",
+    "VERIFIED_RECOVERED",
     "FAILED_FINAL",
     "UNKNOWN",
     "PUBLISHED_UNVERIFIED",
@@ -264,6 +265,7 @@ class PublisherRuntime:
                 normalized["content_asset_id"],
                 normalized["video_uri"],
                 normalized["asset_sha256"],
+                normalized["media"],
             )
             if not ok:
                 raise IntentValidationError(error or "MEDIA_ASSET_NOT_ADMITTED")
@@ -485,7 +487,8 @@ class PublisherRuntime:
                     """
                     SELECT COUNT(*) FROM instagram_publication_jobs
                     WHERE status IN (
-                        'PUBLISH_REQUESTED','UNKNOWN','PUBLISHED','VERIFIED','PUBLISHED_UNVERIFIED'
+                        'PUBLISH_REQUESTED','UNKNOWN','PUBLISHED','VERIFIED',
+                        'VERIFIED_RECOVERED','PUBLISHED_UNVERIFIED'
                     )
                       AND updated_at >= NOW() - INTERVAL '24 hours'
                     """
@@ -536,6 +539,24 @@ class PublisherRuntime:
                 yield
             finally:
                 conn.commit()
+
+    def _unresolved_ambiguity_exists(self, exclude_key=None):
+        self._ensure_tables()
+        with self.db_connect() as conn:
+            with conn.cursor() as cur:
+                if exclude_key:
+                    cur.execute(
+                        "SELECT COUNT(*) FROM instagram_publication_jobs "
+                        "WHERE status IN ('UNKNOWN','PUBLISHED_UNVERIFIED','PUBLISH_REQUESTED') "
+                        "AND idempotency_key <> %s",
+                        (exclude_key,),
+                    )
+                else:
+                    cur.execute(
+                        "SELECT COUNT(*) FROM instagram_publication_jobs "
+                        "WHERE status IN ('UNKNOWN','PUBLISHED_UNVERIFIED','PUBLISH_REQUESTED')"
+                    )
+                return int(cur.fetchone()[0]) > 0
 
     def _provider_mutation_allowed(self, key, job):
         with self._advisory_lock("trendradar-instagram-provider-mutation"):
@@ -695,6 +716,14 @@ class PublisherRuntime:
             self._transition(intent["idempotency_key"], "HOLD_CIRCUIT_OPEN", error_code="RECENT_FAILURE_THRESHOLD")
             return 503, self._safe_job(self._get_job(intent["idempotency_key"]))
 
+        if self._unresolved_ambiguity_exists(exclude_key=intent["idempotency_key"]):
+            self._transition(
+                intent["idempotency_key"],
+                "HOLD_CIRCUIT_OPEN",
+                error_code="UNRESOLVED_PUBLICATION_AMBIGUITY",
+            )
+            return 503, self._safe_job(self._get_job(intent["idempotency_key"]))
+
         rec, credential_error = self._credential_gate()
         if credential_error:
             self._transition(intent["idempotency_key"], "HOLD_CREDENTIAL", error_code=credential_error)
@@ -800,6 +829,12 @@ class PublisherRuntime:
                 job = self._get_job(key)
                 if job["status"] != "READY":
                     return 200, self._safe_job(job)
+                if self._unresolved_ambiguity_exists(exclude_key=key):
+                    self._transition(
+                        key, "HOLD_CIRCUIT_OPEN",
+                        error_code="UNRESOLVED_PUBLICATION_AMBIGUITY",
+                    )
+                    return 503, self._safe_job(self._get_job(key))
                 if not self.public_publish_authorized:
                     self._transition(key, "HOLD_PUBLIC_DISABLED", error_code="PUBLIC_PUBLISH_DISABLED")
                     return 202, self._safe_job(self._get_job(key))
@@ -855,6 +890,60 @@ class PublisherRuntime:
             self._transition(key, "VERIFIED", provider_status=str(payload.get("media_product_type") or "VERIFIED"))
             return 200, self._safe_job(self._get_job(key))
 
+        return 200, self._safe_job(self._get_job(key))
+
+    def recover_unknown(self, idempotency_key, candidate_media_id):
+        key = str(idempotency_key or "").strip()
+        candidate = str(candidate_media_id or "").strip()
+        if not key or not candidate:
+            return 400, {"ok": False, "error": "RECOVERY_IDENTIFIERS_REQUIRED"}
+        job = self._get_job(key)
+        if not job:
+            return 404, {"ok": False, "error": "PUBLICATION_JOB_NOT_FOUND"}
+        if job["status"] not in {"UNKNOWN", "PUBLISHED_UNVERIFIED"}:
+            return 409, {
+                "ok": False,
+                "error": "PUBLICATION_NOT_RECOVERABLE",
+                "status": job["status"],
+            }
+
+        rec, credential_error = self._credential_gate()
+        if credential_error:
+            return 503, {"ok": False, "error": credential_error}
+        try:
+            http, payload = self.graph(
+                "GET",
+                f"{rec['user_id']}/media",
+                rec["access_token"],
+                params={
+                    "fields": "id,caption,media_type,media_product_type,timestamp",
+                    "limit": "100",
+                },
+            )
+        except Exception:
+            return 503, {"ok": False, "error": "RECOVERY_PROVIDER_CHECK_FAILED"}
+        if http >= 400 or not isinstance(payload, dict):
+            return 503, {"ok": False, "error": "RECOVERY_PROVIDER_CHECK_REJECTED"}
+
+        matches = [
+            item for item in (payload.get("data") or [])
+            if isinstance(item, dict) and str(item.get("id") or "") == candidate
+        ]
+        if len(matches) != 1:
+            return 409, {"ok": False, "error": "RECOVERY_MEDIA_NOT_FOUND_ON_ACCOUNT"}
+        media = matches[0]
+        if str(media.get("media_product_type") or "").upper() != "REELS":
+            return 409, {"ok": False, "error": "RECOVERY_MEDIA_NOT_REEL"}
+        if str(media.get("caption") or "").strip() != self._final_caption(job):
+            return 409, {"ok": False, "error": "RECOVERY_CAPTION_MISMATCH"}
+
+        self._transition(
+            key,
+            "VERIFIED_RECOVERED",
+            media_id=candidate,
+            provider_status="RECOVERED_VERIFIED",
+        )
+        self._event(key, "RECOVERY_VERIFIED", {"candidate_media_id": candidate})
         return 200, self._safe_job(self._get_job(key))
 
     def status(self, idempotency_key):
