@@ -88,7 +88,7 @@ jobs:
           docker image inspect postgres:18             --format='{{index .RepoDigests 0}}'             > evidence/postgres-image-digest.txt
           cp wheelhouse/SHA256SUMS.txt evidence/wheelhouse-SHA256SUMS.txt
           printf '%s\n'             'TRUSTED_SOURCE_REBUILD=PASS'             'PYTHON_DEPENDENCIES_INSTALLED_FROM_CAPTURED_WHEELHOUSE_ONLY=PASS'             'EXACT_R5_ACCEPTANCE_SUITES=PASS'             > evidence/result.txt
-          find evidence -type f -printf '%P\n' | sort | xargs -I{} sha256sum "evidence/{}"             > evidence/EVIDENCE_SHA256SUMS.txt
+          find evidence -type f ! -name EVIDENCE_SHA256SUMS.txt -printf '%P\n' | sort | xargs -I{} sha256sum "evidence/{}"             > evidence/EVIDENCE_SHA256SUMS.txt
 
       - name: Upload trusted-source evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
