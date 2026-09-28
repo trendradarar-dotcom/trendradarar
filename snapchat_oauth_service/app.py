@@ -847,7 +847,7 @@ def token_status():
             "ok": True,
             "persisted": status["persisted"],
             "connected": status["connected"],
-            "access_credential_present": status["access_present"],
+            "access_credential_present": status["access_credential_present"],
             "refresh_credential_present": status["refresh_credential_present"],
             "expires_at": status["expires_at"],
             "scope": status["scope"],
