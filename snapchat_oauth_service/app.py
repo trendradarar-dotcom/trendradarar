@@ -35,6 +35,8 @@ STATE_TTL_SECONDS = 900
 INTENT_TTL_SECONDS = 300
 LOCALE_RE = re.compile(r"^[a-z]{2}_[A-Z]{2}$")
 PUBLICATION_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{8,160}$")
+CONTENT_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{8,160}$")
+JOB_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{8,160}$")
 SPOTLIGHT_ID_RE = re.compile(r"^[A-Za-z0-9_\-]{8,300}$")
 EXPECTED_USERNAME_DEFAULT = "trendradarar"
 
@@ -157,9 +159,18 @@ def _production_gate_errors() -> list[str]:
     return errors
 
 
-def _publication_control_gate():
+def _publication_control_gate(correlation_id: str | None = None):
     errors = _production_gate_errors()
     if errors:
+        audit(
+            "publication_gate_blocked",
+            correlation_id=correlation_id or _correlation_id(),
+            route=request.path,
+            authorization_decision="DENY",
+            error=",".join(errors),
+            http_status=403,
+            external_publication_side_effect="NONE",
+        )
         return jsonify({
             "ok": False,
             "error": "publication_gate_closed",
@@ -458,10 +469,21 @@ def _verify_authorized_profile_access(token: str) -> None:
         raise RuntimeError("authorized_profile_access_failed")
 
 
-def _validate_spotlight_input(file_storage, description: str, locale: str, publication_id: str | None = None):
+def _validate_spotlight_input(
+    file_storage,
+    description: str,
+    locale: str,
+    publication_id: str | None = None,
+    content_id: str | None = None,
+    job_id: str | None = None,
+):
     errors = []
     if publication_id is not None and not PUBLICATION_ID_RE.fullmatch(publication_id or ""):
         errors.append("publication_id_invalid")
+    if content_id is not None and not CONTENT_ID_RE.fullmatch(content_id or ""):
+        errors.append("content_id_invalid")
+    if job_id is not None and not JOB_ID_RE.fullmatch(job_id or ""):
+        errors.append("job_id_invalid")
     if not file_storage or not file_storage.filename:
         errors.append("video_required")
     elif not file_storage.filename.lower().endswith(".mp4"):
@@ -830,7 +852,7 @@ def auth_callback():
         return jsonify({"ok": False, "error": "oauth_binding_failed", "provider_http_status": status}), 502
     except Exception as exc:
         audit("oauth_binding_failed", correlation_id=_correlation_id(), status="FAIL", error=type(exc).__name__, external_publication_side_effect="NONE")
-        return jsonify({"ok": False, "error": "oauth_binding_failed", "reason": str(exc)}), 502
+        return jsonify({"ok": False, "error": "oauth_binding_failed"}), 502
 
 
 @app.get("/admin/token-status")
@@ -947,11 +969,20 @@ def validate_spotlight():
     if denied:
         return denied
 
-    publication_id = request.form.get("publication_id", "")
+    publication_id = request.form.get("publication_id", "").strip()
+    content_id = request.form.get("content_id", "").strip()
+    job_id = request.form.get("job_id", "").strip()
     video = request.files.get("video")
     description = request.form.get("description", "")
     locale = request.form.get("locale", "ar_SA")
-    errors = _validate_spotlight_input(video, description, locale, publication_id)
+    errors = _validate_spotlight_input(
+        video,
+        description,
+        locale,
+        publication_id,
+        content_id,
+        job_id,
+    )
     if errors:
         return jsonify({"ok": False, "errors": errors, "external_publication_side_effect": "NONE"}), 400
 
@@ -974,6 +1005,8 @@ def validate_spotlight():
             "description_length": len(description),
             "locale": locale,
             "publication_id": publication_id,
+            "content_id": content_id,
+            "job_id": job_id,
             "probed_media": meta,
             "external_publication_side_effect": "NONE",
         }), (200 if not errors else 400)
@@ -1137,17 +1170,26 @@ def spotlight_publish():
     denied = _require_owner()
     if denied:
         return denied
-    blocked = _publication_control_gate()
+    blocked = _publication_control_gate(correlation_id)
     if blocked:
         return blocked
 
     profile_id = _expected_profile_id()
     publication_id = request.form.get("publication_id", "").strip()
+    content_id = request.form.get("content_id", "").strip()
+    job_id = request.form.get("job_id", "").strip()
     video = request.files.get("video")
     description = request.form.get("description", "")
     locale = request.form.get("locale", "ar_SA")
     skip_save = request.form.get("skip_save_to_profile", "false").lower() in {"1", "true", "yes"}
-    errors = _validate_spotlight_input(video, description, locale, publication_id)
+    errors = _validate_spotlight_input(
+        video,
+        description,
+        locale,
+        publication_id,
+        content_id,
+        job_id,
+    )
     if errors:
         return jsonify({"ok": False, "errors": errors, "external_publication_side_effect": "NONE"}), 400
 
@@ -1159,6 +1201,19 @@ def spotlight_publish():
         _verify_authorized_profile_access(token)
         if exact_profile["id"] != profile_id:
             raise RuntimeError("exact_profile_binding_failed")
+
+        audit(
+            "spotlight_authorization_allowed",
+            correlation_id=correlation_id,
+            publication_id=publication_id,
+            content_id=content_id,
+            job_id=job_id,
+            profile_id=profile_id,
+            authorization_decision="ALLOW",
+            oauth_scope=SCOPE,
+            status="PASS",
+            external_publication_side_effect="NONE",
+        )
 
         with tempfile.TemporaryDirectory(prefix="trendradar-snap-") as tmpdir:
             raw_path = str(Path(tmpdir) / "video.mp4")
@@ -1178,6 +1233,8 @@ def spotlight_publish():
             admission = _store().begin_publication(
                 profile_id=profile_id,
                 publication_id=publication_id,
+                content_id=content_id,
+                job_id=job_id,
                 correlation_id=correlation_id,
                 description=description,
                 media_sha256=media_sha256,
@@ -1197,6 +1254,8 @@ def spotlight_publish():
                     "spotlight_duplicate_blocked",
                     correlation_id=correlation_id,
                     publication_id=publication_id,
+                    content_id=content_id,
+                    job_id=job_id,
                     profile_id=profile_id,
                     status=row["state"],
                     attempt_count=row.get("attempt_count"),
@@ -1265,6 +1324,8 @@ def spotlight_publish():
             "spotlight_submit_success",
             correlation_id=correlation_id,
             publication_id=publication_id,
+            content_id=content_id,
+            job_id=job_id,
             profile_id=profile_id,
             remote_media_id=remote_media_id,
             remote_spotlight_id=remote_spotlight_id,
@@ -1276,6 +1337,8 @@ def spotlight_publish():
         return jsonify({
             "ok": True,
             "publication_id": publication_id,
+            "content_id": content_id,
+            "job_id": job_id,
             "state": "SUBMITTED",
             "request_status": posted.get("request_status"),
             "spotlight_id": remote_spotlight_id,
@@ -1289,6 +1352,8 @@ def spotlight_publish():
             "spotlight_publish_blocked_state",
             correlation_id=correlation_id,
             publication_id=publication_id,
+            content_id=content_id,
+            job_id=job_id,
             profile_id=profile_id,
             status="BLOCKED",
             error=str(exc),
@@ -1335,6 +1400,8 @@ def spotlight_publish():
             "spotlight_publish_failed",
             correlation_id=correlation_id,
             publication_id=publication_id,
+            content_id=content_id,
+            job_id=job_id,
             profile_id=profile_id,
             status="ERROR",
             error=error_name,
