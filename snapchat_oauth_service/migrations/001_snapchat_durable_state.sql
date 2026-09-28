@@ -28,6 +28,8 @@ CREATE TABLE IF NOT EXISTS snapchat_oauth_tokens (
 CREATE TABLE IF NOT EXISTS snapchat_publications (
     profile_id TEXT NOT NULL,
     publication_id TEXT NOT NULL,
+    content_id TEXT NOT NULL,
+    job_id TEXT NOT NULL,
     state TEXT NOT NULL,
     attempt_count INTEGER NOT NULL,
     description TEXT,
