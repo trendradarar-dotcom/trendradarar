@@ -550,16 +550,21 @@ class Handler(BaseHTTPRequestHandler):
         if q.get("error"):
             return self.send_html(400,page("Authorization failed","<div class='card'><h1>تعذر التفويض</h1><p>ألغى المستخدم العملية أو رفض TikTok الطلب.</p></div>"))
         state=q.get("state",[""])[0]; code=q.get("code",[""])[0]; now=int(time.time())
+        browser_sid=self.cookie_sid()
+        if not browser_sid:
+            return self.send_html(400,page("Browser binding required","<div class='card'><h1>جلسة المتصفح التي بدأت التفويض غير موجودة</h1><a class='btn' href='/auth/tiktok/start'>ابدأ من جديد</a></div>"))
         store=state_store()
         if store is None:
             return self.send_html(503,page("Durable state required","<div class='card'><h1>التخزين الآمن الدائم غير متاح</h1></div>"))
         try:
-            item=store.consume_oauth_state(state,now=now) if state else None
+            item=store.consume_oauth_state(state,browser_sid,now=now) if state else None
         except DurableStateError:
             item=None
         if not item or now-int(item.get("ts",0))>STATE_TTL:
             return self.send_html(400,page("Invalid state","<div class='card'><h1>جلسة التفويض غير صالحة</h1><a class='btn' href='/auth/tiktok/start'>ابدأ من جديد</a></div>"))
         sid=item["sid"]
+        if sid!=browser_sid:
+            return self.send_html(400,page("Browser binding failed","<div class='card'><h1>جلسة المتصفح لا تطابق جلسة التفويض</h1><a class='btn' href='/auth/tiktok/start'>ابدأ من جديد</a></div>"))
         next_path=item.get("next_path","/share")
         if not code:
             return self.send_html(400,page("Missing code","<div class='card'><h1>لم يصل رمز التفويض</h1></div>"))
