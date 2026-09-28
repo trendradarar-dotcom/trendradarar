@@ -97,6 +97,10 @@ class PostgresRuntimeTests(unittest.TestCase):
             with conn.cursor() as cur:
                 cur.execute("DROP TRIGGER IF EXISTS reject_ready_event ON instagram_publication_events")
                 cur.execute("DROP FUNCTION IF EXISTS reject_ready_event()")
+                cur.execute(
+                    "ALTER TABLE IF EXISTS instagram_publication_events "
+                    "DROP CONSTRAINT IF EXISTS reject_state_transition_for_test"
+                )
                 cur.execute("DELETE FROM instagram_publication_events")
                 cur.execute("DELETE FROM instagram_publication_jobs")
             conn.commit()
@@ -106,6 +110,10 @@ class PostgresRuntimeTests(unittest.TestCase):
             with conn.cursor() as cur:
                 cur.execute("DROP TRIGGER IF EXISTS reject_ready_event ON instagram_publication_events")
                 cur.execute("DROP FUNCTION IF EXISTS reject_ready_event()")
+                cur.execute(
+                    "ALTER TABLE IF EXISTS instagram_publication_events "
+                    "DROP CONSTRAINT IF EXISTS reject_state_transition_for_test"
+                )
             conn.commit()
 
     def test_concurrent_duplicate_reservation_allows_exactly_one_job(self):
