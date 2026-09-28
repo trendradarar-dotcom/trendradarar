@@ -608,13 +608,11 @@ def _extract_spotlight(payload: dict) -> dict:
     return candidates[0]
 
 
-def _provider_state(local_state: str) -> str:
-    value = (local_state or "").upper()
-    if value == "LIVE":
-        return "LIVE"
-    if value == "REJECTED":
-        return "REJECTED"
-    return "SUBMITTED"
+def _provider_state(remote_state: str) -> str:
+    value = (remote_state or "").upper()
+    if value in {"SUBMITTED", "LIVE", "REJECTED"}:
+        return value
+    raise RuntimeError("unexpected_remote_spotlight_state")
 
 
 def _parse_snap_timestamp(value: str | None) -> int | None:
@@ -888,6 +886,9 @@ def profile_binding_readiness():
     blocked = _direct_connection_gate()
     if blocked:
         return blocked
+    denied = _require_owner()
+    if denied:
+        return denied
     try:
         token = _access_token()
         profile = _fetch_exact_public_profile(token)
