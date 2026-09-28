@@ -1,0 +1,173 @@
+name: TikTok Independent Adversarial Retest R3 Package
+
+on:
+  push:
+    branches:
+      - tiktok-runtime-reliability-remediation-20260928
+    paths:
+      - .github/workflows/tiktok-independent-retest-r3-package.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-r3-package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact frozen R3 candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: 47be83f732e63ffc04362f19820c9818e3d574a9
+          path: candidate_repo
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout R3 handoff instructions
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ec3cbdc37f0368d9325f09585381a08367592a46
+          path: handoff_repo
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Build exact-target-bound R3 package
+        shell: bash
+        run: |
+          set -euo pipefail
+          PACKAGE="TrendRadar-TikTok-Independent-Adversarial-Retest-R3-20260928-47be83f7"
+          mkdir -p "$PACKAGE/exact_target" "$PACKAGE/candidate" "$PACKAGE/producer_evidence"
+
+          cd candidate_repo
+          ACTUAL_COMMIT="$(git rev-parse HEAD)"
+          ACTUAL_TREE="$(git rev-parse 'HEAD^{tree}')"
+          test "$ACTUAL_COMMIT" = "47be83f732e63ffc04362f19820c9818e3d574a9"
+          test "$ACTUAL_TREE" = "cf4f045ed253318726ec0aad4b88f7cdac358998"
+
+          git bundle create "../$PACKAGE/exact_target/TikTok-R3-Exact-Target-47be83f7.bundle" HEAD
+          git bundle verify "../$PACKAGE/exact_target/TikTok-R3-Exact-Target-47be83f7.bundle"             > "../$PACKAGE/producer_evidence/BUNDLE_VERIFY_PRODUCER.txt" 2>&1
+
+          git archive --format=tar --output="../$PACKAGE/exact_target/full-repository-snapshot.tar" HEAD
+          git archive --format=tar HEAD | tar -x -C "../$PACKAGE/candidate"
+          git ls-tree -r --full-tree HEAD > "../$PACKAGE/exact_target/FULL_TREE_LS.txt"
+
+          python tools/generate_tiktok_sbom.py             --commit "$ACTUAL_COMMIT"             --output "../$PACKAGE/exact_target/TIKTOK_SBOM_R3.cdx.json"
+
+          {
+            echo "EXACT_COMMIT=$ACTUAL_COMMIT"
+            echo "EXACT_TREE=$ACTUAL_TREE"
+            git show --no-patch --format='COMMIT=%H%nTREE=%T%nPARENTS=%P%nAUTHOR_DATE=%aI%nCOMMITTER_DATE=%cI%nSUBJECT=%s' HEAD
+          } > "../$PACKAGE/exact_target/GIT_SHOW_COMMIT_TREE.txt"
+          cd ..
+
+          cp handoff_repo/review/tiktok/TIKTOK_INDEPENDENT_ADVERSARIAL_RETEST_REQUEST_R3_20260928.md "$PACKAGE/INDEPENDENT_REVIEW_README.md"
+          cp handoff_repo/review/tiktok/TIKTOK_REVIEWER_ACTIONS_R3_AR_20260928.md "$PACKAGE/REVIEWER_ACTIONS_AR.md"
+          cp handoff_repo/review/tiktok/EXACT_TARGET_REOPEN_INSTRUCTIONS_R3_20260928.md "$PACKAGE/EXACT_TARGET_REOPEN_INSTRUCTIONS.md"
+
+          cat > "$PACKAGE/EXACT_TARGET.txt" <<'EOF'
+          PROJECT=TrendHunter / Trend Radar
+          SCOPE=TikTok only
+          REPOSITORY=trendradarar-dotcom/trendradarar
+          FROZEN_REVIEW_BRANCH=tiktok-independent-retest-candidate-20260928-r3
+          EXACT_COMMIT=47be83f732e63ffc04362f19820c9818e3d574a9
+          EXACT_TREE=cf4f045ed253318726ec0aad4b88f7cdac358998
+          PREVIOUS_R2_CANDIDATE=4b1c68a305b80738b0338b601e4cebd48ce1c0bb
+          TIKTOK_AUDIT_APPROVED=false/unset
+          PUBLIC_AUTO_PUBLISH=NOT_AUTHORIZED
+          CANDIDATE_DEPLOYED=false
+          EOF
+
+          cat > "$PACKAGE/START_HERE.md" <<'EOF'
+          # START HERE — TikTok R3 Independent Adversarial Retest
+
+          1. Read EXACT_TARGET_REOPEN_INSTRUCTIONS.md.
+          2. Independently verify bundle commit/tree and reconstruct the full snapshot tree.
+          3. If Exact Target is not PASS, stop Fail-Closed.
+          4. Read INDEPENDENT_REVIEW_README.md in full.
+          5. This review must include dynamic/adversarial execution for F-01 and F-04. Static source review alone is not closure.
+          6. Treat producer tests and CI only as untrusted orientation.
+          7. Regress F-02/F-03/F-05 and critical safety controls.
+          8. Do not Deploy, Merge, alter Render, Recall/resubmit TikTok App Review, enable public posting, or set TIKTOK_AUDIT_APPROVED=true.
+          9. Use only PASS / FAIL / NOT VERIFIED / N/A with reproducible evidence.
+          10. Final production acceptance remains blocked by production persistence/recovery/alerting/cold-takeover gates even if F-01/F-04 pass.
+          EOF
+
+          cat > "$PACKAGE/producer_evidence/PRODUCER_EVIDENCE.md" <<'EOF'
+          # Producer evidence — NOT independent closure evidence
+
+          Prior R2 limited independent review reported:
+          - Exact Target = PASS
+          - F-02 = PASS
+          - F-03 = PASS
+          - F-05 = PASS
+          - F-01 = NOT VERIFIED because session-swapping adversarial probes were not executed
+          - F-04 = NOT VERIFIED because adversarial media corpus was not executed and R2 decoded only the first frame
+          - overall production acceptance = FAIL
+
+          R3 producer changes:
+          - F-01 implementation remains browser/SID-bound and awaits dynamic independent adversarial closure.
+          - F-04 now decodes the entire H.264 stream before provider mutation.
+          - producer CI includes a generated post-first-frame corruption case that a first-frame-only probe can pass but full-stream validation rejects.
+          - README/recovery material now reflects hash-locked dependencies, PyAV media validation, and production-persistence limitations.
+          - obsolete R1 packaging workflow is archived to manual-only.
+
+          Producer-observed R3 internal evidence before freeze:
+          - 47 tests PASS on Python 3.12
+          - hash-locked dependency install PASS
+          - exact-commit SBOM generation PASS
+          - immutable workflow Action ref scan PASS
+
+          These statements must be independently reproduced where material.
+          EOF
+
+          # Producer-side exact-target self-check only.
+          BUNDLE_ABS="$PWD/$PACKAGE/exact_target/TikTok-R3-Exact-Target-47be83f7.bundle"
+          SNAPSHOT_ABS="$PWD/$PACKAGE/exact_target/full-repository-snapshot.tar"
+          rm -rf producer_r3_bundle_verify producer_r3_bundle_clone producer_r3_snapshot
+          git init -q producer_r3_bundle_verify
+          git -C producer_r3_bundle_verify bundle verify "$BUNDLE_ABS"             > "$PACKAGE/producer_evidence/EXACT_TARGET_REPRODUCIBILITY_CHECK.txt" 2>&1
+          git clone -q "$BUNDLE_ABS" producer_r3_bundle_clone
+          {
+            echo "BUNDLE_HEAD=$(git -C producer_r3_bundle_clone rev-parse HEAD)"
+            echo "BUNDLE_TREE=$(git -C producer_r3_bundle_clone rev-parse 'HEAD^{tree}')"
+          } >> "$PACKAGE/producer_evidence/EXACT_TARGET_REPRODUCIBILITY_CHECK.txt"
+
+          mkdir -p producer_r3_snapshot
+          tar -xf "$SNAPSHOT_ABS" -C producer_r3_snapshot
+          git -C producer_r3_snapshot init -q
+          git -C producer_r3_snapshot config core.autocrlf false
+          git -C producer_r3_snapshot add -A
+          SNAPSHOT_TREE="$(git -C producer_r3_snapshot write-tree)"
+          echo "SNAPSHOT_TREE=$SNAPSHOT_TREE" >> "$PACKAGE/producer_evidence/EXACT_TARGET_REPRODUCIBILITY_CHECK.txt"
+
+          test "$(git -C producer_r3_bundle_clone rev-parse HEAD)" = "47be83f732e63ffc04362f19820c9818e3d574a9"
+          test "$(git -C producer_r3_bundle_clone rev-parse 'HEAD^{tree}')" = "cf4f045ed253318726ec0aad4b88f7cdac358998"
+          test "$SNAPSHOT_TREE" = "cf4f045ed253318726ec0aad4b88f7cdac358998"
+
+          python - <<'PY'
+          import json
+          p="TrendRadar-TikTok-Independent-Adversarial-Retest-R3-20260928-47be83f7/exact_target/TIKTOK_SBOM_R3.cdx.json"
+          data=json.load(open(p,encoding="utf-8"))
+          assert data["metadata"]["component"]["version"]=="47be83f732e63ffc04362f19820c9818e3d574a9"
+          assert data["components"]
+          PY
+
+          (
+            cd "$PACKAGE"
+            find . -type f ! -name MANIFEST_SHA256.txt -print0 | sort -z | xargs -0 sha256sum > MANIFEST_SHA256.txt
+          )
+
+          zip -qr "$PACKAGE.zip" "$PACKAGE"
+          sha256sum "$PACKAGE.zip" > "$PACKAGE.zip.sha256"
+
+      - name: Upload R3 adversarial retest package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: TrendRadar-TikTok-Independent-Adversarial-Retest-R3-20260928-47be83f7
+          path: |
+            TrendRadar-TikTok-Independent-Adversarial-Retest-R3-20260928-47be83f7.zip
+            TrendRadar-TikTok-Independent-Adversarial-Retest-R3-20260928-47be83f7.zip.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
