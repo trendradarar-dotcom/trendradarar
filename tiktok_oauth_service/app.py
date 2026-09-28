@@ -72,9 +72,27 @@ def publication_limits():
     return {
         "per_hour":cfg_int("TIKTOK_MAX_MUTATIONS_PER_HOUR",6),
         "per_day":cfg_int("TIKTOK_MAX_MUTATIONS_PER_DAY",24),
+        "global_per_hour":cfg_int("TIKTOK_MAX_GLOBAL_MUTATIONS_PER_HOUR",12),
+        "global_per_day":cfg_int("TIKTOK_MAX_GLOBAL_MUTATIONS_PER_DAY",48),
         "active_per_account":cfg_int("TIKTOK_MAX_ACTIVE_MUTATIONS_PER_ACCOUNT",1),
         "active_global":cfg_int("TIKTOK_MAX_ACTIVE_MUTATIONS_GLOBAL",2),
     }
+
+def record_security_event(event_type, decision, operation=None, account_hash=None, detail=None):
+    store=state_store()
+    if store is None:
+        return False
+    try:
+        store.record_audit_event(
+            event_type=event_type,
+            account_hash=account_hash,
+            operation=operation,
+            decision=decision,
+            detail=detail or {},
+        )
+        return True
+    except DurableStateError:
+        return False
 
 MAX_AUTOMATED_RETRIES=0
 MAX_RETRY_HORIZON_SECONDS=0
@@ -455,6 +473,10 @@ class Handler(BaseHTTPRequestHandler):
         if p.path=="/auth/tiktok/disconnect":
             return self.disconnect_tiktok()
         if p.path in ("/api/post","/api/private-test","/api/upload-draft") and not mutations_allowed():
+            record_security_event(
+                "MUTATION_BLOCKED","BLOCK",operation=p.path,
+                detail={"reason":"kill_switch_or_disabled"},
+            )
             return self.js(423,{"error":"tiktok_mutations_disabled","kill_switch_active":True})
         if p.path=="/api/post":
             return self.post_video(p)
@@ -892,6 +914,8 @@ async function poll(id,s){{
                 limits["per_day"],
                 limits["active_per_account"],
                 limits["active_global"],
+                limits["global_per_hour"],
+                limits["global_per_day"],
             )
             if not admitted:
                 return self.js(429,{"error":"hard_limit_blocked","reason":limit_reason})
@@ -1049,6 +1073,8 @@ async function poll(id,s){{
                 limits["per_day"],
                 limits["active_per_account"],
                 limits["active_global"],
+                limits["global_per_hour"],
+                limits["global_per_day"],
             )
             if not admitted:
                 return self.js(429,{"error":"hard_limit_blocked","reason":limit_reason})
@@ -1159,7 +1185,15 @@ async function poll(id,s){{
         store=state_store()
         if store is None:
             return self.js(503,{"error":"durable_state_required"})
+        account_hash=fingerprint(str(sess.get("open_id","")))
         try:
+            store.record_audit_event(
+                "TIKTOK_DISCONNECT",
+                account_hash=account_hash,
+                operation="OAUTH_REVOKE",
+                decision="REMOTE_CONFIRMED" if status==200 else "REMOTE_UNCONFIRMED",
+                detail={"provider_http_status":status},
+            )
             store.delete_session(sid)
         except DurableStateError:
             return self.js(503,{"error":"local_disconnect_failed"})
