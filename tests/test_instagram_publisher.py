@@ -107,6 +107,14 @@ class MemoryPublisher(PublisherRuntime):
     def _event(self, key, event_type, detail=None):
         self.events.append((key, event_type, detail or {}))
 
+    def _unresolved_ambiguity_exists(self, exclude_key=None):
+        return any(
+            k != exclude_key and v.get("status") in {
+                "UNKNOWN", "PUBLISHED_UNVERIFIED", "PUBLISH_REQUESTED"
+            }
+            for k, v in self.jobs.items()
+        )
+
 
 class PublisherContractTests(unittest.TestCase):
     def make_runtime(self, public=False, enabled=False):
@@ -314,6 +322,22 @@ class PublisherContractTests(unittest.TestCase):
         self.assertEqual(status, 409)
         self.assertEqual(result["error"], "CONTENT_ALREADY_BOUND_TO_PUBLICATION")
 
+    def test_unresolved_unknown_blocks_new_publication(self):
+        runtime = self.make_runtime(public=True, enabled=True)
+        old = runtime.validate_intent(valid_intent())
+        runtime._insert_job(old, "UNKNOWN")
+        changed = valid_intent(
+            publication_id="pub-next",
+            content_asset_id="asset-next",
+            asset_sha256="b" * 64,
+            idempotency_key="idem-next",
+            correlation_id="corr-next",
+        )
+        status, result = runtime.start(changed)
+        self.assertEqual(status, 503)
+        self.assertEqual(result["status"], "HOLD_CIRCUIT_OPEN")
+        self.assertEqual(result["last_error_code"], "UNRESOLVED_PUBLICATION_AMBIGUITY")
+
     def test_exact_professional_user_id_is_required(self):
         runtime = PublisherRuntime(
             db_connect=lambda: None,
@@ -416,6 +440,19 @@ class FlaskBoundaryTests(unittest.TestCase):
         finally:
             self.module._store_public_oauth_nonce = original_store
             self.module._consume_public_oauth_nonce = original_consume
+
+    def test_browser_review_flow_cannot_mutate_when_no_publish(self):
+        with self.client.session_transaction() as sess:
+            sess["instagram_owner_verified"] = True
+            sess["sid"] = "owner-test"
+        self.module.TOKEN_STORE["owner-test"] = {
+            "username": "trendradarar",
+            "user_id": "17841428134382903",
+            "account_type": "BUSINESS",
+        }
+        response = self.client.post("/api/reel", data={"consent": "true"})
+        self.assertEqual(response.status_code, 423)
+        self.assertEqual(response.get_json()["error"], "INSTAGRAM_MUTATIONS_DISABLED")
 
     def test_health_keeps_public_publish_closed(self):
         response = self.client.get("/health")
