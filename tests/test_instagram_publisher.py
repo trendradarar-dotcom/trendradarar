@@ -292,6 +292,28 @@ class PublisherContractTests(unittest.TestCase):
                 with self.assertRaises(IntentValidationError):
                     runtime.validate_intent(valid_intent(**overrides))
 
+    def test_publish_requested_after_restart_becomes_unknown_without_retry(self):
+        runtime = self.make_runtime(public=True, enabled=True)
+        intent = runtime.validate_intent(valid_intent())
+        runtime._insert_job(intent, "PUBLISH_REQUESTED")
+        status, result = runtime.reconcile(intent["idempotency_key"])
+        self.assertEqual(status, 409)
+        self.assertEqual(result["status"], "UNKNOWN")
+        self.assertEqual(result["last_error_code"], "PUBLISH_OUTCOME_AMBIGUOUS_AFTER_RESTART")
+
+    def test_unknown_content_cannot_be_republished_with_new_key(self):
+        runtime = self.make_runtime(public=False)
+        intent = runtime.validate_intent(valid_intent())
+        runtime._insert_job(intent, "UNKNOWN")
+        changed = valid_intent(
+            publication_id="pub-unknown-2",
+            idempotency_key="idem-unknown-2",
+            correlation_id="corr-unknown-2",
+        )
+        status, result = runtime.start(changed)
+        self.assertEqual(status, 409)
+        self.assertEqual(result["error"], "CONTENT_ALREADY_BOUND_TO_PUBLICATION")
+
     def test_exact_professional_user_id_is_required(self):
         runtime = PublisherRuntime(
             db_connect=lambda: None,
