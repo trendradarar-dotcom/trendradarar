@@ -1,3 +1,4 @@
+from contextlib import suppress
 from typing import Any, Dict
 
 import imageio_ffmpeg
@@ -32,10 +33,8 @@ def probe_video(path: str) -> Dict[str, Any]:
         raise MediaProbeError("video_probe_failed") from exc
     finally:
         if reader is not None:
-            try:
+            with suppress(Exception):
                 reader.close()
-            except Exception:
-                pass
 
 
 def validate_spotlight_media(meta: Dict[str, Any]) -> list[str]:
