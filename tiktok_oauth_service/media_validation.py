@@ -127,25 +127,34 @@ def _decode_probe_h264(blob):
             raise MediaValidationError("h264_decoder_required")
         width = int(getattr(stream.codec_context, "width", 0) or 0)
         height = int(getattr(stream.codec_context, "height", 0) or 0)
-        decoded = None
+        frame_count = 0
+        frame_width = 0
+        frame_height = 0
         try:
-            for frame in container.decode(video=stream.index):
-                decoded = frame
-                break
+            for decoded in container.decode(video=stream.index):
+                current_width = int(getattr(decoded, "width", 0) or 0)
+                current_height = int(getattr(decoded, "height", 0) or 0)
+                if current_width <= 0 or current_height <= 0:
+                    raise MediaValidationError("decoded_dimensions_invalid")
+                if width and height and (current_width != width or current_height != height):
+                    raise MediaValidationError("decoded_dimensions_mismatch")
+                if frame_count == 0:
+                    frame_width = current_width
+                    frame_height = current_height
+                elif current_width != frame_width or current_height != frame_height:
+                    raise MediaValidationError("decoded_frame_dimensions_changed")
+                frame_count += 1
+        except MediaValidationError:
+            raise
         except Exception as exc:
             raise MediaValidationError("h264_decode_failed") from exc
-        if decoded is None:
+        if frame_count <= 0:
             raise MediaValidationError("h264_frame_required")
-        frame_width = int(getattr(decoded, "width", 0) or 0)
-        frame_height = int(getattr(decoded, "height", 0) or 0)
-        if frame_width <= 0 or frame_height <= 0:
-            raise MediaValidationError("decoded_dimensions_invalid")
-        if width and height and (frame_width != width or frame_height != height):
-            raise MediaValidationError("decoded_dimensions_mismatch")
         return {
             "codec": codec_name,
             "width": frame_width,
             "height": frame_height,
+            "frame_count": frame_count,
         }
     finally:
         try:
@@ -226,4 +235,5 @@ def validate_mp4(blob, max_bytes, max_duration_sec=None):
         "aspect_ratio": ratio,
         "duration_sec": duration_sec,
         "size_bytes": len(blob),
+        "decoded_frame_count": int(decoded.get("frame_count",0)),
     }
