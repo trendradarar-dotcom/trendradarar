@@ -4,6 +4,7 @@ from http.cookies import SimpleCookie
 from pathlib import Path
 
 from durable_state import DurableState, DurableStateError
+from media_validation import MediaValidationError, validate_mp4
 
 AUTH_URL="https://www.tiktok.com/v2/auth/authorize/"
 TOKEN_URL="https://open.tiktokapis.com/v2/oauth/token/"
@@ -749,9 +750,11 @@ async function poll(id,s){{
             video=load_demo_video()
         except Exception:
             return self.js(500,{"error":"demo_video_unavailable"})
-        duration=mp4_duration_seconds(video)
-        if duration<=0:
-            return self.js(500,{"error":"demo_video_invalid"})
+        try:
+            media_info=validate_mp4(video,MAX_UPLOAD_BYTES)
+        except MediaValidationError as exc:
+            return self.js(500,{"error":"demo_video_invalid","reason":str(exc)})
+        duration=float(media_info["duration_sec"])
 
         print("PRIVATE_TEST stage=creator_info", flush=True)
         ok,status,creator,err=query_creator(sess["access_token"])
@@ -856,9 +859,11 @@ async function poll(id,s){{
         video=self.rfile.read(length)
         if len(video)!=length:
             return self.js(400,{"error":"incomplete_upload_body"})
-        duration=mp4_duration_seconds(video)
-        if duration<=0:
-            return self.js(400,{"error":"invalid_mp4_or_duration_unreadable"})
+        try:
+            media_info=validate_mp4(video,MAX_UPLOAD_BYTES)
+        except MediaValidationError as exc:
+            return self.js(400,{"error":"media_validation_failed","reason":str(exc)})
+        duration=float(media_info["duration_sec"])
 
         ok,status,creator,err=query_creator(sess["access_token"])
         if not ok:
@@ -893,6 +898,9 @@ async function poll(id,s){{
             "allow_stitch":allow_stitch,
             "duration":duration,
             "size":length,
+            "codec":media_info["codec"],
+            "width":media_info["width"],
+            "height":media_info["height"],
         }
         idem,content_hash,account_hash,metadata_hash=publication_identity(
             sess,"DIRECT_POST",video,metadata
@@ -1038,9 +1046,11 @@ async function poll(id,s){{
         video=self.rfile.read(length)
         if len(video)!=length:
             return self.js(400,{"error":"incomplete_upload_body"})
-        duration=mp4_duration_seconds(video)
-        if duration<=0:
-            return self.js(400,{"error":"invalid_mp4_or_duration_unreadable"})
+        try:
+            media_info=validate_mp4(video,MAX_UPLOAD_BYTES)
+        except MediaValidationError as exc:
+            return self.js(400,{"error":"media_validation_failed","reason":str(exc)})
+        duration=float(media_info["duration_sec"])
 
         ok,status,creator,err=query_creator(sess["access_token"])
         if not ok:
@@ -1052,7 +1062,13 @@ async function poll(id,s){{
         store=state_store()
         if store is None:
             return self.js(503,{"error":"durable_state_required"})
-        metadata={"duration":duration,"size":length}
+        metadata={
+            "duration":duration,
+            "size":length,
+            "codec":media_info["codec"],
+            "width":media_info["width"],
+            "height":media_info["height"],
+        }
         idem,content_hash,account_hash,metadata_hash=publication_identity(
             sess,"DRAFT_UPLOAD",video,metadata
         )
