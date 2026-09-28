@@ -1,0 +1,38 @@
+name: TikTok Runtime Remediation CI
+
+on:
+  push:
+    branches:
+      - tiktok-runtime-reliability-remediation-20260928
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  r1-durable-state:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned TikTok remediation dependency
+        run: python -m pip install -r tiktok_oauth_service/requirements.txt
+      - name: Compile exact remediation code
+        run: |
+          python -m py_compile tiktok_oauth_service/app.py
+          python -m py_compile tiktok_oauth_service/durable_state.py
+          python -m py_compile tiktok_oauth_service/test_durable_state.py
+      - name: Durable state unit tests
+        working-directory: tiktok_oauth_service
+        run: python -m unittest -v test_durable_state.py
+      - name: No legacy process-memory OAuth stores
+        run: |
+          ! grep -q '_STATES' tiktok_oauth_service/app.py
+          ! grep -q '_SESSIONS' tiktok_oauth_service/app.py
+          ! grep -q '_HANDOFFS' tiktok_oauth_service/app.py
+      - name: Preserve public-posting lock
+        run: |
+          grep -q 'TIKTOK_AUDIT_APPROVED' tiktok_oauth_service/app.py
