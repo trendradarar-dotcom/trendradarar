@@ -178,7 +178,7 @@ class DurableStateTests(unittest.TestCase):
     def test_audit_detail_rejects_secret_field_names(self):
         with self.assertRaises(DurableStateError):
             self.store.record_audit_event(
-                "BAD","BLOCK",detail={"access_token":"must-not-log"}
+                "BAD",decision="BLOCK",detail={"access_token":"must-not-log"}
             )
 
     def test_tamper_fails_closed(self):
