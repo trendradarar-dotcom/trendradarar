@@ -381,6 +381,11 @@ class FlaskBoundaryTests(unittest.TestCase):
         cls.module = importlib.import_module("app")
         cls.client = cls.module.app.test_client()
 
+    def setUp(self):
+        self.module.TOKEN_STORE.clear()
+        with self.client.session_transaction() as sess:
+            sess.clear()
+
     def test_fresh_browser_cannot_open_share(self):
         response = self.client.get("/share")
         self.assertEqual(response.status_code, 403)
