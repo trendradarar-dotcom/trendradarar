@@ -29,10 +29,12 @@ PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
 SESSION_SECRET = os.getenv("SESSION_SECRET", "").strip()
 GOVERNED_USERNAME = "trendradarar"
 GOVERNED_PROFESSIONAL_USER_ID = "17841428134382903"
-EXPECTED_USERNAME = os.getenv("INSTAGRAM_EXPECTED_USERNAME", GOVERNED_USERNAME).strip().lstrip("@").lower()
-EXPECTED_PROFESSIONAL_USER_ID = os.getenv(
-    "INSTAGRAM_EXPECTED_PROFESSIONAL_USER_ID", GOVERNED_PROFESSIONAL_USER_ID
-).strip()
+GOVERNED_ACCOUNT_TYPE = "BUSINESS"
+# Production identity is intentionally immutable. Environment variables may not retarget
+# the machine publisher or OAuth completion to another Instagram account.
+EXPECTED_USERNAME = GOVERNED_USERNAME
+EXPECTED_PROFESSIONAL_USER_ID = GOVERNED_PROFESSIONAL_USER_ID
+OAUTH_RELINK_HARD_DISABLED = True
 PUBLIC_OAUTH_REDIRECT_URI = os.getenv(
     "INSTAGRAM_PUBLIC_OAUTH_REDIRECT_URI", REDIRECT_URI
 ).strip()
@@ -1001,6 +1003,7 @@ def health():
                 EXPECTED_USERNAME == GOVERNED_USERNAME
                 and EXPECTED_PROFESSIONAL_USER_ID == GOVERNED_PROFESSIONAL_USER_ID
             ),
+            "oauth_relink_hard_disabled": OAUTH_RELINK_HARD_DISABLED,
             "browser_public_publish_enabled": False,
             "publisher_media_spool_configured": bool(DATABASE_URL and PUBLISH_MEDIA_PUBLIC_BASE_URL),
             "publisher_media_max_bytes": PUBLISH_MEDIA_MAX_BYTES,
@@ -1042,6 +1045,8 @@ small{{color:#555}}
 def public_oauth_start():
     if request.method == "OPTIONS":
         return ("", 204)
+    if OAUTH_RELINK_HARD_DISABLED:
+        return jsonify({"ok": False, "error": "OAUTH_RELINK_DISABLED_FAIL_CLOSED"}), 423
     if not _gateway_authorized():
         return jsonify({"ok": False, "error": "GATEWAY_UNAUTHORIZED"}), 403
     if not _configured() or not PUBLIC_OAUTH_REDIRECT_URI:
@@ -1069,6 +1074,8 @@ def public_oauth_start():
 def public_oauth_callback():
     if request.method == "OPTIONS":
         return ("", 204)
+    if OAUTH_RELINK_HARD_DISABLED:
+        return jsonify({"ok": False, "error": "OAUTH_RELINK_DISABLED_FAIL_CLOSED"}), 423
     if not _gateway_authorized():
         return jsonify({"ok": False, "error": "GATEWAY_UNAUTHORIZED"}), 403
     payload = request.get_json(silent=True) or {}
@@ -1112,6 +1119,8 @@ def public_oauth_callback():
 
 @app.get("/auth/instagram/start")
 def instagram_start():
+    if OAUTH_RELINK_HARD_DISABLED:
+        return jsonify({"ok": False, "error": "OAUTH_RELINK_DISABLED_FAIL_CLOSED"}), 423
     if not _configured():
         return jsonify(
             {
@@ -1140,6 +1149,8 @@ def instagram_start():
 
 @app.get("/auth/instagram/callback")
 def instagram_callback():
+    if OAUTH_RELINK_HARD_DISABLED:
+        return jsonify({"ok": False, "error": "OAUTH_RELINK_DISABLED_FAIL_CLOSED"}), 423
     if request.args.get("error"):
         return jsonify(
             {
