@@ -30,10 +30,14 @@ jobs:
           python -m py_compile tiktok_oauth_service/test_reconciliation.py
           python -m py_compile tiktok_oauth_service/test_media_validation.py
           python -m py_compile tiktok_oauth_service/test_atomicity.py
+          python -m py_compile tiktok_oauth_service/test_recovery_qualification.py
+          python -m py_compile tiktok_oauth_service/test_ops_watchdog.py
+          python -m py_compile tools/tiktok_recovery_qualification.py
+          python -m py_compile tools/tiktok_ops_watchdog.py
           python -m py_compile tools/generate_tiktok_sbom.py
       - name: Durable state and safety-gate unit tests
         working-directory: tiktok_oauth_service
-        run: python -m unittest -v test_durable_state.py test_app_safety.py test_recovery.py test_reconciliation.py test_media_validation.py test_atomicity.py
+        run: python -m unittest -v test_durable_state.py test_app_safety.py test_recovery.py test_reconciliation.py test_media_validation.py test_atomicity.py test_recovery_qualification.py test_ops_watchdog.py
       - name: Generate exact-commit SBOM and verify immutable supply-chain refs
         run: |
           python tools/generate_tiktok_sbom.py --commit "$GITHUB_SHA" --output /tmp/tiktok-sbom.cdx.json
