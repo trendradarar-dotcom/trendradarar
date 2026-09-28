@@ -17,7 +17,7 @@ jobs:
     env:
       EXACT_TARGET: 7055c33042b4e46b150315067c08dbda728974e7
       EXACT_TREE: a3feac56d118266fcaf28eff577642e04252f4e3
-      REVIEW_REQUEST: f325be0f871efd0ffc58b98072582bc7e8d52250
+      REVIEW_REQUEST: e76664299bf1a3b47d4715f51803f5c245ad4e51
       LIVE_SYNC_COMMIT: 1a4f99a089d928c45319cde26a5ca71ff32a796c
       CI_RUN: "36378357445"
       WHEELHOUSE_NAME: instagram-runtime-wheelhouse-7055c33042b4e46b150315067c08dbda728974e7
@@ -28,9 +28,10 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Fetch live production-review branch
+      - name: Fetch live and final review-request branches
         run: |
           git fetch origin instagram-production-review-20260924:refs/remotes/origin/instagram-production-review-20260924
+          git fetch origin instagram-m26-6-r4-final-review-request-20260928:refs/remotes/origin/instagram-m26-6-r4-final-review-request-20260928
 
       - name: Build exact Git source and live-equivalence evidence
         shell: bash
@@ -53,7 +54,7 @@ jobs:
           git diff --binary "$EXACT_TARGET" "$REVIEW_REQUEST" > review-evidence/target-to-review.patch
           git diff --name-status "$EXACT_TARGET" "$LIVE_SYNC_COMMIT" > review-evidence/target-to-live.name-status.txt
 
-          git diff --quiet "$EXACT_TARGET" "$REVIEW_REQUEST" --             .             ":(exclude)review/instagram/M26_6_R4_INDEPENDENT_REREVIEW_REQUEST_20260928.md"
+          git diff --quiet "$EXACT_TARGET" "$REVIEW_REQUEST" --             .             ":(exclude)review/instagram/M26_6_R4_FINAL_INDEPENDENT_REREVIEW_REQUEST_20260928.md"
           printf 'PASS: review-request delta is documentation-only.\n'             > review-evidence/documentation-only-delta-proof.txt
 
           test "$(git rev-parse "$LIVE_SYNC_COMMIT^{tree}")" = "$EXACT_TREE"
@@ -118,7 +119,7 @@ jobs:
           set -euo pipefail
           TARGET="7055c33042b4e46b150315067c08dbda728974e7"
           TREE="a3feac56d118266fcaf28eff577642e04252f4e3"
-          REVIEW="f325be0f871efd0ffc58b98072582bc7e8d52250"
+          REVIEW="e76664299bf1a3b47d4715f51803f5c245ad4e51"
           LIVE="1a4f99a089d928c45319cde26a5ca71ff32a796c"
 
           rm -rf verify-repo
@@ -128,7 +129,7 @@ jobs:
           test "$(git rev-parse "$TARGET^{tree}")" = "$TREE"
           test "$(git rev-parse "$REVIEW^")" = "$TARGET"
           test "$(git rev-parse "$LIVE^{tree}")" = "$TREE"
-          test "$(git diff --name-only "$TARGET" "$REVIEW")" =             "review/instagram/M26_6_R4_INDEPENDENT_REREVIEW_REQUEST_20260928.md"
+          test "$(git diff --name-only "$TARGET" "$REVIEW")" =             "review/instagram/M26_6_R4_FINAL_INDEPENDENT_REREVIEW_REQUEST_20260928.md"
           test -z "$(git diff --name-only "$TARGET" "$LIVE")"
           printf 'PASS: target, tree, review delta, and live tree equivalence verified.\n'
           SH
