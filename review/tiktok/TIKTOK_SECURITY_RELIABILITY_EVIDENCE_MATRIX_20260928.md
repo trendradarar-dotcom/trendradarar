@@ -4,7 +4,7 @@ Date: 2026-09-28
 Scope: TikTok only
 Verified pre-remediation live target: `a421e755c31bf8e00a2cffc047db2c7d9e70bcbe`
 Current remediation branch: `tiktok-runtime-reliability-remediation-20260928`
-Matrix snapshot head: `24f01de955902a3dc2e93917bf2649b93613f4b6`
+Matrix snapshot head: current remediation branch; exact candidate freeze follows after CI closure
 
 Status vocabulary:
 - INTERNAL PASS — implemented and covered by exact-branch automated evidence, but not a substitute for required independent verification.
@@ -38,30 +38,30 @@ Status vocabulary:
 | 20 | Fail-Closed | PARTIAL | Missing durable state, missing scope, account mismatch, kill switch, malformed/ambiguous provider outcomes fail closed in covered paths. Independent negative matrix remains. |
 | 21 | Unknown-State Handling | INTERNAL PASS | UNKNOWN is durable, survives restart, is not PUBLISHED and cannot restart upload by state transition. |
 | 22 | Negative / Adversarial Tests | PARTIAL | Scope, token refresh, account mismatch, tamper, duplicate, provider 5xx, restore/restart and kill-switch tests exist. Full requested matrix remains. |
-| 23 | Race / Concurrency Tests | PARTIAL | SQLite `BEGIN IMMEDIATE` gives atomic idempotency/admission; explicit parallel-worker stress test still required. |
-| 24 | Media Validation | PARTIAL | Type, maximum bytes, complete body and parseable duration are checked. Full codec/resolution/aspect-ratio/integrity matrix is not yet implemented/evidenced. |
+| 23 | Race / Concurrency Tests | INTERNAL PASS | Threaded atomicity tests prove a single creator for the same idempotency key and a single per-account admission under a concurrent two-intent race. Independent stress/review still required for final acceptance. |
+| 24 | Media Validation | INTERNAL PASS | Hardened admission now parses ISO-BMFF structure fail-closed, requires complete MP4 structure, H.264 sample entry, bounded dimensions/aspect ratio/size and creator duration limit. Truncated/malformed/oversize tests pass; the legacy private diagnostic sample was exposed as structurally truncated and the legacy mutation diagnostic was disabled rather than weakening validation. |
 | 25 | SSRF Controls | N/A | TikTok mutation paths accept uploaded video bytes; they do not fetch user-supplied media URLs. Reassess if URL ingestion is added. |
 | 26 | Metadata Integrity | PARTIAL | Caption length, privacy, creator interaction restrictions and operation-bound metadata hash are present. Broader malformed/encoding/injection tests remain. |
 | 27 | Rate-Limit Handling | PARTIAL | Conservative internal hard limits and zero automatic retries reduce storm risk. Live TikTok 429 behavior still requires controlled evidence. |
 | 28 | Hard Limits | INTERNAL PASS | Per-account/hour/day, global/hour/day and active-account/global limits are enforced transactionally. |
 | 29 | Maximum Blast Radius | INTERNAL PASS | Defaults: 6/account/hour, 24/account/day, 12/global/hour, 48/global/day, 1 active/account, 2 active/global, duplicate publish=0. |
-| 30 | Monitoring | NOT VERIFIED | No production alerting/monitoring acceptance evidence yet. |
+| 30 | Monitoring | PARTIAL | Secret-free `/ops/health` now reports durable-state readiness, UNKNOWN count, stale non-terminal count, active count, kill-switch state and mutation enablement; durable health tests flag UNKNOWN/stale work. External production monitor/notification routing is not yet configured or evidenced. |
 | 31 | Audit Trail | INTERNAL PASS | Durable publication/admission/state/control audit events; secret field names are rejected from audit details. |
-| 32 | Kill Switch | INTERNAL PASS | Mutations are disabled by default; explicit kill switch blocks Direct Post, draft and private test with HTTP 423. |
+| 32 | Kill Switch | INTERNAL PASS | Mutations are disabled by default; explicit kill switch blocks Direct Post and draft upload with HTTP 423. The legacy private mutation diagnostic is separately disabled with HTTP 410. |
 | 33 | Read-Only / No-Publish Mode | INTERNAL PASS | Default runtime posture blocks mutations while health/status/reconciliation paths remain available. |
 | 34 | Secret Rotation / Revocation | PARTIAL | Token refresh rotation, TikTok revoke flow and MultiFernet key rotation support/tests exist. Operational owner rotation drill remains. |
 | 35 | Restart / Crash Recovery | PARTIAL | PROCESSING/UNKNOWN persistence and backup/restore tests pass. Full crash-at-each-side-effect fault-injection matrix remains. |
 | 36 | Remote/Local Reconciliation | INTERNAL PASS | Provider status updates DIRECT_POST to PUBLISHED, draft to READY, 5xx to UNKNOWN; account mismatch blocks provider query. |
 | 37 | Backup / Restore | PARTIAL | Verified SQLite backup/quick-check/restore implementation and tests. Production backup destination/state persistence not yet proven. |
 | 38 | Restore Does Not Duplicate Publishing | INTERNAL PASS | Restored PUBLISHED intent remains duplicate-blocking; UNKNOWN intent remains non-republishable. |
-| 39 | Supply Chain Review | PARTIAL | `cryptography` is version-pinned; GitHub Actions are pinned by immutable commit SHA. Full dependency-hash/SBOM/independent review remains. |
+| 39 | Supply Chain Review | PARTIAL | Direct and transitive Python dependencies (`cryptography`, `cffi`, `pycparser`) are version-pinned; GitHub Actions are pinned by immutable commit SHA. Full hash-locked dependency set/SBOM/independent review remains. |
 | 40 | Golden Recovery Baseline | NOT VERIFIED | Golden Release is intentionally NOT frozen before independent retest and production persistence evidence. |
 | 41 | Recovery Runbook | PARTIAL | Repository runbook exists. A controlled independent recovery drill is still required. |
 | 42 | Owner Recovery Package | INTERNAL PASS | Owner package records source, architecture, trust boundaries, env names, state schema, build/run, revoke, backup/restore and rebuild flow. |
 | 43 | Rebuild From Trusted Source | PARTIAL | Procedure is documented; clean-room rebuild execution is not yet independently proven. |
 | 44 | Human Takeover | PARTIAL | Handover material exists; takeover by a new engineer has not yet been observed. |
 | 45 | Cold Engineer Handover | NOT VERIFIED | Must be executed by a person/agent independent of development using only repository package/runbooks. |
-| 46 | All Blocking Findings Closed | NOT VERIFIED | Production persistence, monitoring, media validation, independent pen/review, cold handover and remaining adversarial probes are open. |
+| 46 | All Blocking Findings Closed | NOT VERIFIED | Production-persistent state/backup infrastructure, external monitoring/alert routing, independent pen/code/architecture review, cold handover and remaining live fault-injection/provider probes are open. |
 | 47 | No Critical NOT VERIFIED | NOT VERIFIED | Independent verification and production-recovery evidence are intentionally still open. |
 
 ## Current verdict
