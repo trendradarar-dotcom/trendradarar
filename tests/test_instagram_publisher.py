@@ -273,6 +273,15 @@ class FlaskBoundaryTests(unittest.TestCase):
         self.assertEqual(response.status_code, 403)
         self.assertEqual(response.get_json()["error"], "UNAUTHORIZED")
 
+    def test_disconnect_get_is_not_a_mutating_route(self):
+        response = self.client.get("/disconnect")
+        self.assertEqual(response.status_code, 405)
+
+    def test_disconnect_post_requires_owner_session(self):
+        response = self.client.post("/disconnect")
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.get_json()["error"], "OWNER_SESSION_REQUIRED")
+
     def test_deauthorize_rejects_unsigned_request(self):
         response = self.client.post("/deauthorize")
         self.assertEqual(response.status_code, 400)
