@@ -174,7 +174,13 @@ jobs:
 
           sha256sum recovery-evidence/source-schema.sql             > recovery-evidence/source-schema.sha256
           sha256sum recovery-evidence/restored-schema.sql             > recovery-evidence/restored-schema.sha256
+          set +e
           diff -u recovery-evidence/source-schema.sql recovery-evidence/restored-schema.sql             > recovery-evidence/schema-diff.txt
+          echo "$?" > recovery-evidence/raw-schema-text-diff-exit-code.txt
+          set -e
+          # Raw pg_dump text is retained as evidence only. The blocking
+          # equivalence check is the canonical PostgreSQL catalog/data snapshot
+          # performed by recovery_drill.py in the next step.
 
       - name: Verify restored bytes, constraints, and fail-closed state semantics
         run: |
