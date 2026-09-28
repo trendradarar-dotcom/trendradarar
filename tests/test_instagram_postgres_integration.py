@@ -107,6 +107,15 @@ class PostgresIntegrationTests(unittest.TestCase):
         self.runtime = self.make_runtime(public=True, enabled=True)
         self.runtime._ensure_tables()
 
+    def tearDown(self):
+        with self.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "ALTER TABLE IF EXISTS instagram_publication_events "
+                    "DROP CONSTRAINT IF EXISTS reject_state_transition_for_test"
+                )
+            conn.commit()
+
     def make_runtime(self, *, public=True, enabled=True, max_daily=10):
         return PublisherRuntime(
             db_connect=self.connect,
