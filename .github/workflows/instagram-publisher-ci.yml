@@ -57,6 +57,20 @@ jobs:
         run: |
           python -m pip_audit -r instagram_oauth_service/requirements.txt
           python -m pip_audit -r instagram_oauth_gateway/requirements.txt
+      - name: Build immutable runtime wheel evidence
+        run: |
+          mkdir -p dependency-wheelhouse
+          python -m pip download --only-binary=:all:             -r instagram_oauth_service/requirements.txt             -d dependency-wheelhouse
+          python -m pip download --only-binary=:all:             -r instagram_oauth_gateway/requirements.txt             -d dependency-wheelhouse
+          (cd dependency-wheelhouse && sha256sum * | sort > SHA256SUMS.txt)
+      - name: Upload exact runtime wheelhouse
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: instagram-runtime-wheelhouse-${{ github.sha }}
+          path: dependency-wheelhouse/
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
       - name: Compile exact Instagram sources
         run: |
           python -m py_compile instagram_oauth_service/app.py
