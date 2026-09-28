@@ -26,12 +26,16 @@ class MediaProbeIntegrationTests(unittest.TestCase):
                 "-f",
                 "lavfi",
                 "-i",
-                f"color=c=black:s=270x480:r=12:d={duration}",
+                f"testsrc2=size=270x480:rate=24:duration={duration}",
                 "-an",
                 "-c:v",
                 "libx264",
                 "-pix_fmt",
                 "yuv420p",
+                "-preset",
+                "ultrafast",
+                "-crf",
+                "18",
                 "-movflags",
                 "+faststart",
                 path,
@@ -45,7 +49,8 @@ class MediaProbeIntegrationTests(unittest.TestCase):
 
     def _copy_with_late_payload_corruption(self, source):
         target = self._temp_mp4_path()
-        data = bytearray(open(source, "rb").read())
+        with open(source, "rb") as handle:
+            data = bytearray(handle.read())
         marker = data.find(b"mdat")
         self.assertGreater(marker, 0, "generated MP4 does not contain mdat")
         payload_start = marker + 4
@@ -64,7 +69,8 @@ class MediaProbeIntegrationTests(unittest.TestCase):
 
     def _copy_with_late_truncation(self, source):
         target = self._temp_mp4_path()
-        data = open(source, "rb").read()
+        with open(source, "rb") as handle:
+            data = handle.read()
         marker = data.find(b"mdat")
         self.assertGreater(marker, 0, "generated MP4 does not contain mdat")
         payload_start = marker + 4
