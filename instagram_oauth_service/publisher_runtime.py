@@ -5,6 +5,11 @@ from contextlib import contextmanager
 from urllib.parse import urlparse
 
 
+GOVERNED_USERNAME = "trendradarar"
+GOVERNED_PROFESSIONAL_USER_ID = "17841428134382903"
+GOVERNED_ACCOUNT_TYPE = "BUSINESS"
+
+
 TERMINAL_STATUSES = {
     "VERIFIED",
     "VERIFIED_RECOVERED",
@@ -63,6 +68,10 @@ class PublisherRuntime:
         self.graph = graph
         self.expected_username = (expected_username or "").strip().lstrip("@").lower()
         self.expected_professional_user_id = str(expected_professional_user_id or "").strip()
+        self.governed_account_binding_valid = (
+            self.expected_username == GOVERNED_USERNAME
+            and self.expected_professional_user_id == GOVERNED_PROFESSIONAL_USER_ID
+        )
         self.publish_secret = publish_secret or ""
         self.public_publish_authorized = bool(public_publish_authorized)
         self.publish_enabled = bool(publish_enabled)
@@ -84,6 +93,7 @@ class PublisherRuntime:
     def configured(self):
         return bool(
             self.publish_secret
+            and self.governed_account_binding_valid
             and self.expected_username
             and self.expected_professional_user_id
             and self.media_host_allowlist
@@ -407,9 +417,18 @@ class PublisherRuntime:
                     ),
                 )
                 inserted = cur.fetchone() is not None
+                if inserted:
+                    cur.execute(
+                        "INSERT INTO instagram_publication_events"
+                        "(idempotency_key,event_type,safe_detail) "
+                        "VALUES (%s,%s,%s::jsonb)",
+                        (
+                            intent["idempotency_key"],
+                            "JOB_CREATED",
+                            json.dumps({"status": status}, sort_keys=True),
+                        ),
+                    )
             conn.commit()
-        if inserted:
-            self._event(intent["idempotency_key"], "JOB_CREATED", {"status": status})
         return inserted
 
     def _reservation_conflict_response(self, intent):
@@ -466,6 +485,11 @@ class PublisherRuntime:
         if increment_attempt:
             fields.append("attempt_count = attempt_count + 1")
         values.append(key)
+        safe_detail = {
+            "status": status,
+            "provider_status": provider_status,
+            "error_code": error_code,
+        }
         with self.db_connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -473,12 +497,17 @@ class PublisherRuntime:
                     + " WHERE idempotency_key = %s",
                     tuple(values),
                 )
+                cur.execute(
+                    "INSERT INTO instagram_publication_events"
+                    "(idempotency_key,event_type,safe_detail) "
+                    "VALUES (%s,%s,%s::jsonb)",
+                    (
+                        key,
+                        "STATE_TRANSITION",
+                        json.dumps(safe_detail, sort_keys=True),
+                    ),
+                )
             conn.commit()
-        self._event(key, "STATE_TRANSITION", {
-            "status": status,
-            "provider_status": provider_status,
-            "error_code": error_code,
-        })
 
     def _count_guard(self):
         with self.db_connect() as conn:
@@ -497,7 +526,10 @@ class PublisherRuntime:
                 cur.execute(
                     """
                     SELECT COUNT(*) FROM instagram_publication_jobs
-                    WHERE status IN ('NEW','CONTAINER_CREATED','PROCESSING','READY','PUBLISH_REQUESTED')
+                    WHERE status IN (
+                        'NEW','CONTAINER_CREATE_REQUESTED','CONTAINER_CREATED',
+                        'PROCESSING','READY','PUBLISH_REQUESTED'
+                    )
                     """
                 )
                 inflight = int(cur.fetchone()[0])
@@ -547,14 +579,20 @@ class PublisherRuntime:
                 if exclude_key:
                     cur.execute(
                         "SELECT COUNT(*) FROM instagram_publication_jobs "
-                        "WHERE status IN ('UNKNOWN','PUBLISHED_UNVERIFIED','PUBLISH_REQUESTED') "
+                        "WHERE status IN (
+                        'UNKNOWN','PUBLISHED_UNVERIFIED','PUBLISH_REQUESTED',
+                        'CONTAINER_CREATE_REQUESTED'
+                    ) "
                         "AND idempotency_key <> %s",
                         (exclude_key,),
                     )
                 else:
                     cur.execute(
                         "SELECT COUNT(*) FROM instagram_publication_jobs "
-                        "WHERE status IN ('UNKNOWN','PUBLISHED_UNVERIFIED','PUBLISH_REQUESTED')"
+                        "WHERE status IN (
+                        'UNKNOWN','PUBLISHED_UNVERIFIED','PUBLISH_REQUESTED',
+                        'CONTAINER_CREATE_REQUESTED'
+                    )"
                     )
                 return int(cur.fetchone()[0]) > 0
 
@@ -571,6 +609,8 @@ class PublisherRuntime:
             return True, None
 
     def _credential_gate(self):
+        if not self.governed_account_binding_valid:
+            return None, "GOVERNED_ACCOUNT_BINDING_INVALID"
         rec = self.load_token_record()
         if not rec:
             return None, "NO_PERSISTED_TOKEN"
@@ -578,11 +618,11 @@ class PublisherRuntime:
         account_type = str(rec.get("account_type") or "").strip().replace(" ", "_").upper()
         user_id = rec.get("user_id")
         perms = {str(p) for p in (rec.get("granted_permissions") or [])}
-        if username != self.expected_username:
+        if username != GOVERNED_USERNAME:
             return None, "ACCOUNT_MISMATCH"
         if not user_id or account_type != "BUSINESS":
             return None, "BUSINESS_ACCOUNT_REQUIRED"
-        if str(user_id) != self.expected_professional_user_id:
+        if str(user_id) != GOVERNED_PROFESSIONAL_USER_ID:
             return None, "PROFESSIONAL_USER_ID_MISMATCH"
         if not {"instagram_business_basic", "instagram_business_content_publish"}.issubset(perms):
             return None, "PUBLISH_PERMISSION_MISSING"
@@ -598,11 +638,11 @@ class PublisherRuntime:
         live_username = str(profile.get("username") or "").strip().lstrip("@").lower()
         live_type = str(profile.get("account_type") or "").strip().replace(" ", "_").upper()
         live_user_id = profile.get("user_id")
-        if live_username != self.expected_username or str(live_user_id) != str(user_id):
+        if live_username != GOVERNED_USERNAME or str(live_user_id) != str(user_id):
             return None, "LIVE_ACCOUNT_BINDING_MISMATCH"
-        if str(live_user_id) != self.expected_professional_user_id:
+        if str(live_user_id) != GOVERNED_PROFESSIONAL_USER_ID:
             return None, "LIVE_PROFESSIONAL_USER_ID_MISMATCH"
-        if live_type != "BUSINESS":
+        if live_type != GOVERNED_ACCOUNT_TYPE:
             return None, "LIVE_ACCOUNT_NOT_BUSINESS"
         return rec, None
 
@@ -658,6 +698,62 @@ class PublisherRuntime:
             "public_publish_authorized": self.public_publish_authorized,
             "publish_enabled": self.publish_enabled,
         }
+
+    def _create_container_for_job(self, key, job, rec):
+        quota_ok, quota = self._provider_quota_gate(rec)
+        if not quota_ok:
+            self._transition(key, "HOLD_RATE_LIMIT", error_code=quota)
+            return 429, self._safe_job(self._get_job(key))
+
+        mutation_ok, _ = self._provider_mutation_allowed(key, job)
+        if not mutation_ok:
+            return 429, self._safe_job(self._get_job(key))
+
+        # Persist the pre-side-effect marker before the provider mutation.
+        # A restart from this state is ambiguous and must never blindly retry.
+        self._transition(
+            key,
+            "CONTAINER_CREATE_REQUESTED",
+            provider_status="REQUESTED",
+            increment_attempt=True,
+        )
+        data = {
+            "media_type": "REELS",
+            "video_url": job["video_uri"],
+            "caption": self._final_caption(job),
+            "share_to_feed": "false",
+            "is_ai_generated": "true" if job["is_ai_generated"] else "false",
+        }
+        try:
+            http, provider = self.graph(
+                "POST", f"{rec['user_id']}/media", rec["access_token"], data=data
+            )
+        except Exception:
+            self._transition(
+                key, "UNKNOWN",
+                error_code="CREATE_CONTAINER_AMBIGUOUS",
+            )
+            return 502, self._safe_job(self._get_job(key))
+
+        container_id = provider.get("id") if isinstance(provider, dict) else None
+        if http >= 500:
+            self._transition(
+                key, "UNKNOWN",
+                error_code="CREATE_CONTAINER_PROVIDER_5XX",
+            )
+            return 502, self._safe_job(self._get_job(key))
+        if http >= 400 or not container_id:
+            self._transition(
+                key, "FAILED_FINAL",
+                error_code="CREATE_CONTAINER_REJECTED",
+            )
+            return 422, self._safe_job(self._get_job(key))
+
+        self._transition(
+            key, "CONTAINER_CREATED",
+            container_id=str(container_id), provider_status="CREATED",
+        )
+        return 202, self._safe_job(self._get_job(key))
 
     def start(self, payload):
         intent = self.validate_intent(payload)
@@ -732,54 +828,10 @@ class PublisherRuntime:
             self._transition(intent["idempotency_key"], "HOLD_CREDENTIAL", error_code=credential_error)
             return 503, self._safe_job(self._get_job(intent["idempotency_key"]))
 
-        quota_ok, quota = self._provider_quota_gate(rec)
-        if not quota_ok:
-            self._transition(intent["idempotency_key"], "HOLD_RATE_LIMIT", error_code=quota)
-            return 429, self._safe_job(self._get_job(intent["idempotency_key"]))
-
         job = self._get_job(intent["idempotency_key"])
-        mutation_ok, _ = self._provider_mutation_allowed(intent["idempotency_key"], job)
-        if not mutation_ok:
-            return 429, self._safe_job(self._get_job(intent["idempotency_key"]))
-
-        data = {
-            "media_type": "REELS",
-            "video_url": intent["video_uri"],
-            "caption": self._final_caption(intent),
-            "share_to_feed": "false",
-            "is_ai_generated": "true" if intent["is_ai_generated"] else "false",
-        }
-        try:
-            http, provider = self.graph(
-                "POST", f"{rec['user_id']}/media", rec["access_token"], data=data
-            )
-        except Exception:
-            self._transition(
-                intent["idempotency_key"], "UNKNOWN",
-                error_code="CREATE_CONTAINER_AMBIGUOUS", increment_attempt=True,
-            )
-            return 502, self._safe_job(self._get_job(intent["idempotency_key"]))
-
-        container_id = provider.get("id") if isinstance(provider, dict) else None
-        if http >= 500:
-            self._transition(
-                intent["idempotency_key"], "UNKNOWN",
-                error_code="CREATE_CONTAINER_PROVIDER_5XX", increment_attempt=True,
-            )
-            return 502, self._safe_job(self._get_job(intent["idempotency_key"]))
-        if http >= 400 or not container_id:
-            self._transition(
-                intent["idempotency_key"], "FAILED_FINAL",
-                error_code="CREATE_CONTAINER_REJECTED", increment_attempt=True,
-            )
-            return 422, self._safe_job(self._get_job(intent["idempotency_key"]))
-
-        self._transition(
-            intent["idempotency_key"], "CONTAINER_CREATED",
-            container_id=str(container_id), provider_status="CREATED",
-            increment_attempt=True,
+        return self._create_container_for_job(
+            intent["idempotency_key"], job, rec
         )
-        return 202, self._safe_job(self._get_job(intent["idempotency_key"]))
 
     def reconcile(self, idempotency_key):
         key = str(idempotency_key or "").strip()
@@ -794,11 +846,47 @@ class PublisherRuntime:
         if job["status"] == "PUBLISH_REQUESTED":
             self._transition(key, "UNKNOWN", error_code="PUBLISH_OUTCOME_AMBIGUOUS_AFTER_RESTART")
             return 409, self._safe_job(self._get_job(key))
+        if job["status"] == "CONTAINER_CREATE_REQUESTED":
+            self._transition(
+                key,
+                "UNKNOWN",
+                error_code="CREATE_CONTAINER_OUTCOME_AMBIGUOUS_AFTER_RESTART",
+            )
+            return 409, self._safe_job(self._get_job(key))
+
+        if job["status"] == "NEW":
+            if not self.public_publish_authorized:
+                self._transition(key, "HOLD_PUBLIC_DISABLED", error_code="PUBLIC_PUBLISH_DISABLED")
+                return 202, self._safe_job(self._get_job(key))
+            if not self.publish_enabled:
+                self._transition(key, "HOLD_KILL_SWITCH", error_code="PUBLISH_KILL_SWITCH_DISABLED")
+                return 202, self._safe_job(self._get_job(key))
+            if not self.configured():
+                self._transition(key, "HOLD_CREDENTIAL", error_code="PUBLISHER_NOT_CONFIGURED")
+                return 503, self._safe_job(self._get_job(key))
+            if self._unresolved_ambiguity_exists(exclude_key=key):
+                self._transition(key, "HOLD_CIRCUIT_OPEN", error_code="UNRESOLVED_PUBLICATION_AMBIGUITY")
+                return 503, self._safe_job(self._get_job(key))
+            published_24h, inflight, failures_15m, _, _ = self._count_guard()
+            if published_24h >= self.max_daily_publications:
+                self._transition(key, "HOLD_BLAST_RADIUS", error_code="MAX_DAILY_PUBLICATIONS")
+                return 429, self._safe_job(self._get_job(key))
+            if inflight > self.max_inflight:
+                self._transition(key, "HOLD_CONCURRENCY", error_code="MAX_INFLIGHT")
+                return 429, self._safe_job(self._get_job(key))
+            if failures_15m >= self.circuit_failure_threshold:
+                self._transition(key, "HOLD_CIRCUIT_OPEN", error_code="RECENT_FAILURE_THRESHOLD")
+                return 503, self._safe_job(self._get_job(key))
 
         rec, credential_error = self._credential_gate()
         if credential_error:
             self._transition(key, "HOLD_CREDENTIAL", error_code=credential_error)
             return 503, self._safe_job(self._get_job(key))
+
+        if job["status"] == "NEW":
+            return self._create_container_for_job(
+                key, self._get_job(key), rec
+            )
 
         if job["status"] in {"CONTAINER_CREATED", "PROCESSING"}:
             try:
