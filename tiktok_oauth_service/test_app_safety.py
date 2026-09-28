@@ -11,11 +11,13 @@ class SafetyGateTests(unittest.TestCase):
     def setUp(self):
         self.old = dict(os.environ)
         self.old_api_form_post = app.api_form_post
+        self.old_urlopen = app.urllib.request.urlopen
         app._STORE = None
         app._STORE_ERROR = ""
 
     def tearDown(self):
         app.api_form_post = self.old_api_form_post
+        app.urllib.request.urlopen = self.old_urlopen
         app._STORE = None
         app._STORE_ERROR = ""
         os.environ.clear()
@@ -59,6 +61,47 @@ class SafetyGateTests(unittest.TestCase):
         h = self._handler("/api/post")
         h.post_video = lambda p: ("routed", p.path)
         self.assertEqual(h.do_POST(), ("routed", "/api/post"))
+
+    def test_oauth_callback_without_initiating_cookie_fails_before_exchange(self):
+        store = self._configure_store()
+        now = int(app.time.time())
+        store.upsert_session("legit-sid", {"csrf":"csrf"}, now=now, ttl=app.SESSION_TTL)
+        store.create_oauth_state("state-1", "legit-sid", "/share", now=now, ttl=app.STATE_TTL)
+        called = {"value":False}
+        def forbidden_urlopen(*args, **kwargs):
+            called["value"] = True
+            raise AssertionError("token exchange must not run")
+        app.urllib.request.urlopen = forbidden_urlopen
+        h = app.Handler.__new__(app.Handler)
+        h.headers = {}
+        h.send_html = lambda status, text, headers=None: (status, text)
+        result = h.callback({"state":["state-1"],"code":["provider-code"]})
+        self.assertEqual(result[0], 400)
+        self.assertFalse(called["value"])
+        # Missing-cookie probe must not consume the legitimate state.
+        item = store.consume_oauth_state("state-1", "legit-sid", now=now+1)
+        self.assertEqual(item["sid"], "legit-sid")
+        self.tmp.cleanup()
+
+    def test_oauth_callback_wrong_cookie_fails_without_consuming_legitimate_state(self):
+        store = self._configure_store()
+        now = int(app.time.time())
+        store.upsert_session("legit-sid", {"csrf":"csrf"}, now=now, ttl=app.SESSION_TTL)
+        store.create_oauth_state("state-2", "legit-sid", "/share", now=now, ttl=app.STATE_TTL)
+        called = {"value":False}
+        def forbidden_urlopen(*args, **kwargs):
+            called["value"] = True
+            raise AssertionError("token exchange must not run")
+        app.urllib.request.urlopen = forbidden_urlopen
+        h = app.Handler.__new__(app.Handler)
+        h.headers = {"Cookie":"trsid=attacker-sid"}
+        h.send_html = lambda status, text, headers=None: (status, text)
+        result = h.callback({"state":["state-2"],"code":["provider-code"]})
+        self.assertEqual(result[0], 400)
+        self.assertFalse(called["value"])
+        item = store.consume_oauth_state("state-2", "legit-sid", now=now+1)
+        self.assertEqual(item["sid"], "legit-sid")
+        self.tmp.cleanup()
 
     def test_missing_required_scope_fails_closed(self):
         sess = {"access_token":"a","refresh_token":"r","open_id":"creator","scope":"video.upload","expires_at":9999999999}
