@@ -9,6 +9,8 @@ import tempfile
 import time
 import uuid
 from pathlib import Path
+
+import av
 from urllib.parse import urlencode
 
 import requests
@@ -18,14 +20,21 @@ from flask import Flask, Response, jsonify, redirect, request, send_file, sessio
 from publisher_runtime import IntentValidationError, PublisherRuntime
 
 APP_NAME = "Trend Radar — Instagram Reels"
-BUILD_REVISION = "M26.2-PUBLISHER-HARDENING-20260928"
+BUILD_REVISION = "M26.6-R4-PRODUCTION-ADMISSION-20260928"
 API_VERSION = os.getenv("INSTAGRAM_API_VERSION", "v26.0").strip() or "v26.0"
 APP_ID = os.getenv("INSTAGRAM_APP_ID", "").strip()
 APP_SECRET = os.getenv("INSTAGRAM_APP_SECRET", "").strip()
 REDIRECT_URI = os.getenv("INSTAGRAM_REDIRECT_URI", "").strip()
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
 SESSION_SECRET = os.getenv("SESSION_SECRET", "").strip()
-EXPECTED_USERNAME = os.getenv("INSTAGRAM_EXPECTED_USERNAME", "").strip().lstrip("@").lower()
+GOVERNED_USERNAME = "trendradarar"
+GOVERNED_PROFESSIONAL_USER_ID = "17841428134382903"
+GOVERNED_ACCOUNT_TYPE = "BUSINESS"
+# Production identity is intentionally immutable. Environment variables may not retarget
+# the machine publisher or OAuth completion to another Instagram account.
+EXPECTED_USERNAME = GOVERNED_USERNAME
+EXPECTED_PROFESSIONAL_USER_ID = GOVERNED_PROFESSIONAL_USER_ID
+OAUTH_RELINK_HARD_DISABLED = True
 PUBLIC_OAUTH_REDIRECT_URI = os.getenv(
     "INSTAGRAM_PUBLIC_OAUTH_REDIRECT_URI", REDIRECT_URI
 ).strip()
@@ -94,7 +103,14 @@ MEDIA_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _configured():
-    return bool(APP_ID and APP_SECRET and REDIRECT_URI and SESSION_SECRET)
+    return bool(
+        APP_ID
+        and APP_SECRET
+        and REDIRECT_URI
+        and SESSION_SECRET
+        and EXPECTED_USERNAME == GOVERNED_USERNAME
+        and EXPECTED_PROFESSIONAL_USER_ID == GOVERNED_PROFESSIONAL_USER_ID
+    )
 
 
 def _sid():
@@ -278,7 +294,6 @@ def _cleanup_publisher_media():
 def _mp4_signature_preflight(blob, declared_audio_codec=""):
     if not isinstance(blob, (bytes, bytearray)) or len(blob) < 16:
         return False, "MEDIA_TOO_SMALL"
-    # ISO-BMFF/MP4 must expose an ftyp box near the head.
     if b"ftyp" not in bytes(blob[:64]):
         return False, "MEDIA_CONTAINER_NOT_MP4"
     sample = bytes(blob)
@@ -288,6 +303,81 @@ def _mp4_signature_preflight(blob, declared_audio_codec=""):
     if audio not in {"", "none"} and b"mp4a" not in sample:
         return False, "MEDIA_AAC_SIGNATURE_NOT_FOUND"
     return True, None
+
+
+def _inspect_media_blob(blob):
+    try:
+        with av.open(io.BytesIO(bytes(blob)), mode="r") as container:
+            videos = list(container.streams.video)
+            audios = list(container.streams.audio)
+            if len(videos) != 1 or len(audios) > 1:
+                return None, "MEDIA_STREAM_LAYOUT_NOT_ALLOWED"
+            video = videos[0]
+            audio = audios[0] if audios else None
+            if container.duration:
+                duration_seconds = float(container.duration) / 1_000_000.0
+            elif video.duration is not None and video.time_base is not None:
+                duration_seconds = float(video.duration * video.time_base)
+            else:
+                return None, "MEDIA_DURATION_UNAVAILABLE"
+            if video.average_rate is None:
+                return None, "MEDIA_FPS_UNAVAILABLE"
+            fps = float(video.average_rate)
+            width = int(video.codec_context.width or 0)
+            height = int(video.codec_context.height or 0)
+            video_codec = str(video.codec_context.name or "").lower()
+            video_bytes = 0
+            audio_bytes = 0
+            for packet in container.demux():
+                if packet.size is None:
+                    continue
+                if packet.stream.index == video.index:
+                    video_bytes += int(packet.size)
+                elif audio is not None and packet.stream.index == audio.index:
+                    audio_bytes += int(packet.size)
+            if duration_seconds <= 0:
+                return None, "MEDIA_DURATION_INVALID"
+            video_bitrate_bps = int((video_bytes * 8) / duration_seconds)
+            audio_codec = "none"
+            audio_sample_rate_hz = 0
+            audio_bitrate_bps = 0
+            if audio is not None:
+                audio_codec = str(audio.codec_context.name or "").lower()
+                audio_sample_rate_hz = int(audio.codec_context.sample_rate or 0)
+                audio_bitrate_bps = int((audio_bytes * 8) / duration_seconds)
+            verified = {
+                "mime_type": "video/mp4",
+                "size_bytes": len(blob),
+                "duration_seconds": round(duration_seconds, 6),
+                "width": width,
+                "height": height,
+                "fps": round(fps, 6),
+                "video_codec": video_codec,
+                "audio_codec": audio_codec,
+                "video_bitrate_bps": video_bitrate_bps,
+                "audio_sample_rate_hz": audio_sample_rate_hz,
+                "audio_bitrate_bps": audio_bitrate_bps,
+            }
+    except Exception:
+        return None, "MEDIA_PARSE_FAILED"
+    if verified["video_codec"] not in {"h264", "avc", "avc1"}:
+        return None, "MEDIA_VIDEO_CODEC_NOT_ALLOWED"
+    if not 3 <= verified["duration_seconds"] <= 900:
+        return None, "MEDIA_DURATION_OUT_OF_RANGE"
+    if not 23 <= verified["fps"] <= 60:
+        return None, "MEDIA_FPS_OUT_OF_RANGE"
+    if verified["width"] <= 0 or verified["width"] > 1920 or verified["height"] <= 0:
+        return None, "MEDIA_DIMENSIONS_OUT_OF_RANGE"
+    if verified["video_bitrate_bps"] <= 0 or verified["video_bitrate_bps"] > 25_000_000:
+        return None, "MEDIA_VIDEO_BITRATE_OUT_OF_RANGE"
+    if verified["audio_codec"] != "none":
+        if verified["audio_codec"] not in {"aac", "mp4a"}:
+            return None, "MEDIA_AUDIO_CODEC_NOT_ALLOWED"
+        if verified["audio_sample_rate_hz"] != 48_000:
+            return None, "MEDIA_AUDIO_SAMPLE_RATE_INVALID"
+        if verified["audio_bitrate_bps"] <= 0 or verified["audio_bitrate_bps"] > 128_000:
+            return None, "MEDIA_AUDIO_BITRATE_OUT_OF_RANGE"
+    return verified, None
 
 
 def _store_publisher_media(content_asset_id, blob, metadata, declared_sha256=""):
@@ -316,6 +406,9 @@ def _store_publisher_media(content_asset_id, blob, metadata, declared_sha256="")
     ok, error = _mp4_signature_preflight(blob, metadata.get("audio_codec"))
     if not ok:
         return 400, {"ok": False, "error": error}
+    verified_media, error = _inspect_media_blob(blob)
+    if not verified_media:
+        return 400, {"ok": False, "error": error or "MEDIA_PARSE_FAILED"}
 
     _cleanup_publisher_media()
     _ensure_publisher_media_table()
@@ -342,6 +435,7 @@ def _store_publisher_media(content_asset_id, blob, metadata, declared_sha256="")
                         "asset_sha256": actual_sha,
                         "size_bytes": size,
                         "video_uri": f"{base}/publisher-media/{existing[0]}.mp4",
+                        "verified_media": verified_media,
                     }
 
             cur.execute(
@@ -375,7 +469,7 @@ def _store_publisher_media(content_asset_id, blob, metadata, declared_sha256="")
                 """,
                 (
                     asset_id, token, actual_sha, mime_type, size,
-                    json.dumps(metadata, separators=(",", ":"), sort_keys=True),
+                    json.dumps(verified_media, separators=(",", ":"), sort_keys=True),
                     bytes(blob), PUBLISH_MEDIA_TTL_SECONDS,
                 ),
             )
@@ -389,11 +483,12 @@ def _store_publisher_media(content_asset_id, blob, metadata, declared_sha256="")
         "asset_sha256": actual_sha,
         "size_bytes": size,
         "video_uri": f"{base}/publisher-media/{token}.mp4",
+        "verified_media": verified_media,
         "expires_in": PUBLISH_MEDIA_TTL_SECONDS,
     }
 
 
-def _verify_publisher_media_asset(content_asset_id, video_uri, asset_sha256):
+def _verify_publisher_media_asset(content_asset_id, video_uri, asset_sha256, expected_media=None):
     if not DATABASE_URL:
         return False, "PERSISTENCE_NOT_CONFIGURED"
     try:
@@ -407,7 +502,7 @@ def _verify_publisher_media_asset(content_asset_id, video_uri, asset_sha256):
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT sha256
+                    SELECT sha256, metadata_json
                     FROM instagram_media_assets
                     WHERE content_asset_id = %s
                       AND public_token = %s
@@ -420,6 +515,15 @@ def _verify_publisher_media_asset(content_asset_id, video_uri, asset_sha256):
             return False, "MEDIA_ASSET_NOT_FOUND_OR_EXPIRED"
         if not hmac.compare_digest(str(row[0]), str(asset_sha256 or "").lower()):
             return False, "MEDIA_ASSET_SHA256_MISMATCH"
+        if expected_media is not None:
+            stored = row[1] if isinstance(row[1], dict) else json.loads(row[1])
+            for field in (
+                "mime_type","size_bytes","duration_seconds","width","height","fps",
+                "video_codec","audio_codec","video_bitrate_bps",
+                "audio_sample_rate_hz","audio_bitrate_bps",
+            ):
+                if stored.get(field) != expected_media.get(field):
+                    return False, "MEDIA_VERIFIED_METADATA_MISMATCH"
         return True, None
     except Exception:
         return False, "MEDIA_ASSET_PROBE_FAILED"
@@ -448,6 +552,7 @@ PUBLISHER = PublisherRuntime(
     load_token_record=_load_persisted_token_record,
     graph=_graph,
     expected_username=EXPECTED_USERNAME,
+    expected_professional_user_id=EXPECTED_PROFESSIONAL_USER_ID,
     publish_secret=PUBLISH_M2M_SECRET,
     public_publish_authorized=PUBLIC_PUBLISH_AUTHORIZED,
     publish_enabled=PUBLISH_ENABLED,
@@ -508,8 +613,10 @@ def _refresh_long_lived_token(rec):
     professional_user_id = profile.get("user_id")
     if EXPECTED_USERNAME and actual_username != EXPECTED_USERNAME:
         return 403, {"ok": False, "error": "INSTAGRAM_ACCOUNT_MISMATCH"}
-    if not professional_user_id or normalized_account_type not in {"BUSINESS", "MEDIA_CREATOR"}:
-        return 422, {"ok": False, "error": "INSTAGRAM_PROFESSIONAL_ACCOUNT_REQUIRED"}
+    if str(professional_user_id or "") != EXPECTED_PROFESSIONAL_USER_ID:
+        return 403, {"ok": False, "error": "INSTAGRAM_PROFESSIONAL_USER_ID_MISMATCH"}
+    if normalized_account_type != "BUSINESS":
+        return 422, {"ok": False, "error": "INSTAGRAM_BUSINESS_ACCOUNT_REQUIRED"}
 
     refreshed["username"] = profile.get("username")
     refreshed["account_type"] = account_type
@@ -529,11 +636,81 @@ def _b64url_encode(value):
     return base64.urlsafe_b64encode(value).decode("utf-8").rstrip("=")
 
 
+def _ensure_public_oauth_state_table():
+    if not DATABASE_URL:
+        return False
+    try:
+        with _db_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS instagram_oauth_state_nonces (
+                        nonce_hash TEXT PRIMARY KEY,
+                        expires_at TIMESTAMPTZ NOT NULL,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                    """
+                )
+                cur.execute("DELETE FROM instagram_oauth_state_nonces WHERE expires_at <= NOW()")
+            conn.commit()
+        return True
+    except Exception:
+        return False
+
+
+def _store_public_oauth_nonce(nonce, ttl_seconds=900):
+    if not nonce or not _ensure_public_oauth_state_table():
+        return False
+    nonce_hash = hashlib.sha256(str(nonce).encode("utf-8")).hexdigest()
+    try:
+        with _db_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO instagram_oauth_state_nonces(nonce_hash, expires_at)
+                    VALUES (%s, NOW() + (%s * INTERVAL '1 second'))
+                    ON CONFLICT DO NOTHING
+                    RETURNING nonce_hash
+                    """,
+                    (nonce_hash, int(ttl_seconds)),
+                )
+                inserted = cur.fetchone() is not None
+            conn.commit()
+        return inserted
+    except Exception:
+        return False
+
+
+def _consume_public_oauth_nonce(nonce):
+    if not nonce or not _ensure_public_oauth_state_table():
+        return False
+    nonce_hash = hashlib.sha256(str(nonce).encode("utf-8")).hexdigest()
+    try:
+        with _db_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    DELETE FROM instagram_oauth_state_nonces
+                    WHERE nonce_hash = %s AND expires_at > NOW()
+                    RETURNING nonce_hash
+                    """,
+                    (nonce_hash,),
+                )
+                consumed = cur.fetchone() is not None
+            conn.commit()
+        return consumed
+    except Exception:
+        return False
+
+
 def _make_public_oauth_state():
+    nonce = secrets.token_urlsafe(18)
+    if not _store_public_oauth_nonce(nonce):
+        return ""
     payload = {
         "aud": "trendradar-instagram-public-oauth",
         "iat": int(time.time()),
-        "nonce": secrets.token_urlsafe(18),
+        "nonce": nonce,
         "redirect_uri": PUBLIC_OAUTH_REDIRECT_URI,
     }
     encoded_payload = _b64url_encode(
@@ -568,6 +745,9 @@ def _verify_public_oauth_state(state, max_age_seconds=900):
         if payload.get("redirect_uri") != PUBLIC_OAUTH_REDIRECT_URI:
             return None
         if issued_at <= 0 or now - issued_at < 0 or now - issued_at > max_age_seconds:
+            return None
+        nonce = str(payload.get("nonce") or "")
+        if not nonce or not _consume_public_oauth_nonce(nonce):
             return None
         return payload
     except Exception:
@@ -672,17 +852,17 @@ def _complete_oauth(code, redirect_uri):
             "expected_username": EXPECTED_USERNAME,
             "actual_username": actual_username or None,
         }
-    if not professional_user_id:
-        return 502, {
+    if str(professional_user_id or "") != EXPECTED_PROFESSIONAL_USER_ID:
+        return 403, {
             "ok": False,
             "stage": "PROFILE_VERIFY",
-            "error": "MISSING_PROFESSIONAL_USER_ID",
+            "error": "INSTAGRAM_PROFESSIONAL_USER_ID_MISMATCH",
         }
-    if normalized_account_type not in {"BUSINESS", "MEDIA_CREATOR"}:
+    if normalized_account_type != "BUSINESS":
         return 422, {
             "ok": False,
             "stage": "PROFILE_VERIFY",
-            "error": "INSTAGRAM_PROFESSIONAL_ACCOUNT_REQUIRED",
+            "error": "INSTAGRAM_BUSINESS_ACCOUNT_REQUIRED",
             "account_type": account_type or None,
         }
 
@@ -819,6 +999,11 @@ def health():
             "publisher_m2m_configured": bool(PUBLISH_M2M_SECRET),
             "media_host_allowlist_configured": bool(MEDIA_HOST_ALLOWLIST),
             "publisher_control_plane_configured": PUBLISHER.configured(),
+            "exact_account_binding_configured": (
+                EXPECTED_USERNAME == GOVERNED_USERNAME
+                and EXPECTED_PROFESSIONAL_USER_ID == GOVERNED_PROFESSIONAL_USER_ID
+            ),
+            "oauth_relink_hard_disabled": OAUTH_RELINK_HARD_DISABLED,
             "browser_public_publish_enabled": False,
             "publisher_media_spool_configured": bool(DATABASE_URL and PUBLISH_MEDIA_PUBLIC_BASE_URL),
             "publisher_media_max_bytes": PUBLISH_MEDIA_MAX_BYTES,
@@ -849,7 +1034,7 @@ small{{color:#555}}
 <p>Creator-authorized Instagram integration for original Trend Radar short-form content.</p>
 <p><strong>Configuration:</strong> {configured}</p>
 <p><strong>Publishing safety:</strong> public publishing is {"enabled" if PUBLIC_PUBLISH_AUTHORIZED else "disabled"}.</p>
-<p><a class="button" href="/auth/instagram/start">Connect Instagram Professional Account</a></p>
+<p><strong>OAuth re-link:</strong> hard-disabled fail-closed in this production-admission candidate.</p>
 </div>
 <p><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/data-deletion">Data deletion</a></p>
 <small>Instagram Professional (Business or Creator) accounts only.</small>
@@ -860,11 +1045,15 @@ small{{color:#555}}
 def public_oauth_start():
     if request.method == "OPTIONS":
         return ("", 204)
+    if OAUTH_RELINK_HARD_DISABLED:
+        return jsonify({"ok": False, "error": "OAUTH_RELINK_DISABLED_FAIL_CLOSED"}), 423
     if not _gateway_authorized():
         return jsonify({"ok": False, "error": "GATEWAY_UNAUTHORIZED"}), 403
     if not _configured() or not PUBLIC_OAUTH_REDIRECT_URI:
         return jsonify({"ok": False, "error": "META_APP_NOT_CONFIGURED"}), 503
     state = _make_public_oauth_state()
+    if not state:
+        return jsonify({"ok": False, "error": "OAUTH_STATE_PERSISTENCE_UNAVAILABLE"}), 503
     params = {
         "client_id": APP_ID,
         "redirect_uri": PUBLIC_OAUTH_REDIRECT_URI,
@@ -885,6 +1074,8 @@ def public_oauth_start():
 def public_oauth_callback():
     if request.method == "OPTIONS":
         return ("", 204)
+    if OAUTH_RELINK_HARD_DISABLED:
+        return jsonify({"ok": False, "error": "OAUTH_RELINK_DISABLED_FAIL_CLOSED"}), 423
     if not _gateway_authorized():
         return jsonify({"ok": False, "error": "GATEWAY_UNAUTHORIZED"}), 403
     payload = request.get_json(silent=True) or {}
@@ -928,6 +1119,8 @@ def public_oauth_callback():
 
 @app.get("/auth/instagram/start")
 def instagram_start():
+    if OAUTH_RELINK_HARD_DISABLED:
+        return jsonify({"ok": False, "error": "OAUTH_RELINK_DISABLED_FAIL_CLOSED"}), 423
     if not _configured():
         return jsonify(
             {
@@ -956,6 +1149,8 @@ def instagram_start():
 
 @app.get("/auth/instagram/callback")
 def instagram_callback():
+    if OAUTH_RELINK_HARD_DISABLED:
+        return jsonify({"ok": False, "error": "OAUTH_RELINK_DISABLED_FAIL_CLOSED"}), 423
     if request.args.get("error"):
         return jsonify(
             {
@@ -1029,6 +1224,13 @@ def prepare_reel():
     if not _owner_session_verified():
         return jsonify({"ok": False, "error": "OWNER_SESSION_REQUIRED"}), 403
     rec = _token_record()
+    if not PUBLIC_PUBLISH_AUTHORIZED or not PUBLISH_ENABLED:
+        return jsonify({
+            "ok": False,
+            "error": "INSTAGRAM_MUTATIONS_DISABLED",
+            "public_publish_authorized": PUBLIC_PUBLISH_AUTHORIZED,
+            "publish_enabled": PUBLISH_ENABLED,
+        }), 423
     if request.form.get("consent") != "true":
         return jsonify({"ok": False, "error": "EXPLICIT_CONSENT_REQUIRED"}), 400
 
@@ -1211,6 +1413,18 @@ def internal_publish_reconcile():
         return jsonify({"ok": False, "error": "UNAUTHORIZED"}), 403
     body = request.get_json(silent=True) or {}
     status, payload = PUBLISHER.reconcile(body.get("idempotency_key"))
+    return jsonify(payload), status
+
+
+@app.post("/internal/publish/recover")
+def internal_publish_recover():
+    supplied = request.headers.get("X-TrendRadar-Publish", "")
+    if not PUBLISHER.authorize(supplied):
+        return jsonify({"ok": False, "error": "UNAUTHORIZED"}), 403
+    body = request.get_json(silent=True) or {}
+    status, payload = PUBLISHER.recover_unknown(
+        body.get("idempotency_key"), body.get("candidate_media_id")
+    )
     return jsonify(payload), status
 
 

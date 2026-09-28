@@ -15,6 +15,7 @@ PUBLIC_ORIGIN = os.getenv(
 ).strip().rstrip("/")
 
 app = Flask(__name__)
+OAUTH_BROWSER_HARD_DISABLED = True
 
 
 def _origin_allowed():
@@ -59,6 +60,8 @@ main{max-width:620px;padding:28px}.btn{display:block;text-align:center;padding:1
 
 @app.get("/oauth/browser/start")
 def oauth_browser_start():
+    if OAUTH_BROWSER_HARD_DISABLED:
+        return jsonify({"ok": False, "error": "OAUTH_BROWSER_DISABLED_FAIL_CLOSED"}), 423
     if not _configured():
         return jsonify({"ok": False, "error": "GATEWAY_NOT_CONFIGURED"}), 503
     try:
@@ -90,6 +93,8 @@ def oauth_browser_start():
 
 @app.get("/oauth/browser/callback")
 def oauth_browser_callback():
+    if OAUTH_BROWSER_HARD_DISABLED:
+        return jsonify({"ok": False, "error": "OAUTH_BROWSER_DISABLED_FAIL_CLOSED"}), 423
     if not _configured():
         return jsonify({"ok": False, "error": "GATEWAY_NOT_CONFIGURED"}), 503
 
@@ -162,6 +167,8 @@ def health():
 def oauth_start():
     if request.method == "OPTIONS":
         return ("", 204)
+    if OAUTH_BROWSER_HARD_DISABLED:
+        return jsonify({"ok": False, "error": "OAUTH_BROWSER_DISABLED_FAIL_CLOSED"}), 423
     if not _configured():
         return jsonify({"ok": False, "error": "GATEWAY_NOT_CONFIGURED"}), 503
     if not _origin_allowed():
@@ -200,6 +207,8 @@ def oauth_start():
 def oauth_callback():
     if request.method == "OPTIONS":
         return ("", 204)
+    if OAUTH_BROWSER_HARD_DISABLED:
+        return jsonify({"ok": False, "error": "OAUTH_BROWSER_DISABLED_FAIL_CLOSED"}), 423
     if not _configured():
         return jsonify({"ok": False, "error": "GATEWAY_NOT_CONFIGURED"}), 503
     if not _origin_allowed():

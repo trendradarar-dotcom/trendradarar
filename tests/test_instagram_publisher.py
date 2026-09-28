@@ -2,6 +2,7 @@ import importlib
 import os
 import sys
 import unittest
+from contextlib import contextmanager
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
 SERVICE_DIR = os.path.join(ROOT, "instagram_oauth_service")
@@ -38,6 +39,9 @@ def valid_intent(**overrides):
             "fps": 30,
             "video_codec": "h264",
             "audio_codec": "aac",
+            "video_bitrate_bps": 8_000_000,
+            "audio_sample_rate_hz": 48_000,
+            "audio_bitrate_bps": 128_000,
         },
     }
     payload.update(overrides)
@@ -46,10 +50,12 @@ def valid_intent(**overrides):
 
 class MemoryPublisher(PublisherRuntime):
     def __init__(self, **kwargs):
+        graph = kwargs.pop("graph", None) or (lambda *a, **k: (500, {}))
         super().__init__(
             db_connect=lambda: None,
             load_token_record=lambda: None,
-            graph=lambda *a, **k: (500, {}),
+            graph=graph,
+            expected_professional_user_id="17841428134382903",
             **kwargs,
         )
         self.jobs = {}
@@ -59,7 +65,20 @@ class MemoryPublisher(PublisherRuntime):
         item = self.jobs.get(key)
         return dict(item) if item else None
 
+    def _get_job_by_content_identity(self, content_asset_id, asset_sha256):
+        for item in self.jobs.values():
+            if item.get("account_key") == self.expected_username and (
+                item.get("content_asset_id") == content_asset_id
+                or item.get("asset_sha256") == asset_sha256
+            ):
+                return dict(item)
+        return None
+
     def _insert_job(self, intent, status):
+        if intent["idempotency_key"] in self.jobs:
+            return False
+        if self._get_job_by_content_identity(intent["content_asset_id"], intent["asset_sha256"]):
+            return False
         self.jobs[intent["idempotency_key"]] = {
             **intent,
             "account_key": self.expected_username,
@@ -70,6 +89,11 @@ class MemoryPublisher(PublisherRuntime):
             "attempt_count": 0,
             "last_error_code": None,
         }
+        return True
+
+    @contextmanager
+    def _advisory_lock(self, name):
+        yield
 
     def _transition(self, key, status, **kwargs):
         self.jobs[key]["status"] = status
@@ -83,6 +107,52 @@ class MemoryPublisher(PublisherRuntime):
 
     def _event(self, key, event_type, detail=None):
         self.events.append((key, event_type, detail or {}))
+
+    def _count_guard(self):
+        values = list(self.jobs.values())
+        published_24h = sum(v.get("status") in {
+            "PUBLISH_REQUESTED", "UNKNOWN", "PUBLISHED", "VERIFIED",
+            "VERIFIED_RECOVERED", "PUBLISHED_UNVERIFIED"
+        } for v in values)
+        inflight = sum(v.get("status") in {
+            "NEW", "CONTAINER_CREATE_REQUESTED", "CONTAINER_CREATED",
+            "PROCESSING", "READY", "PUBLISH_REQUESTED"
+        } for v in values)
+        failures_15m = sum(v.get("status") in {
+            "FAILED_FINAL", "UNKNOWN", "PUBLISHED_UNVERIFIED"
+        } for v in values)
+        unpublished_queue = sum(v.get("status") not in {
+            "VERIFIED", "FAILED_FINAL", "UNKNOWN", "PUBLISHED_UNVERIFIED",
+            "HOLD_QUEUE_LIMIT"
+        } for v in values)
+        mutations_1m = sum(1 for _, event_type, _ in self.events if event_type == "PROVIDER_MUTATION")
+        return published_24h, inflight, failures_15m, unpublished_queue, mutations_1m
+
+    def _credential_gate(self):
+        if not self.governed_account_binding_valid:
+            return None, "GOVERNED_ACCOUNT_BINDING_INVALID"
+        return {
+            "username": "trendradarar",
+            "account_type": "BUSINESS",
+            "user_id": "17841428134382903",
+            "granted_permissions": [
+                "instagram_business_basic",
+                "instagram_business_content_publish",
+            ],
+            "access_token": "token",
+        }, None
+
+    def _provider_quota_gate(self, rec):
+        return True, 0
+
+    def _unresolved_ambiguity_exists(self, exclude_key=None):
+        return any(
+            k != exclude_key and v.get("status") in {
+                "UNKNOWN", "PUBLISHED_UNVERIFIED", "PUBLISH_REQUESTED",
+                "CONTAINER_CREATE_REQUESTED"
+            }
+            for k, v in self.jobs.items()
+        )
 
 
 class PublisherContractTests(unittest.TestCase):
@@ -230,17 +300,231 @@ class PublisherContractTests(unittest.TestCase):
         self.assertEqual(status, 409)
         self.assertEqual(result["error"], "IDEMPOTENCY_CONFLICT")
 
+    def test_same_content_with_new_idempotency_key_is_blocked(self):
+        runtime = self.make_runtime(public=False)
+        runtime.start(valid_intent())
+        changed = valid_intent(
+            publication_id="pub-002",
+            idempotency_key="idem-002",
+            correlation_id="corr-002",
+        )
+        status, result = runtime.start(changed)
+        self.assertEqual(status, 409)
+        self.assertEqual(result["error"], "CONTENT_ALREADY_BOUND_TO_PUBLICATION")
+
+    def test_same_bytes_with_new_content_asset_id_is_blocked(self):
+        runtime = self.make_runtime(public=False)
+        runtime.start(valid_intent())
+        changed = valid_intent(
+            publication_id="pub-003",
+            content_asset_id="asset-003",
+            idempotency_key="idem-003",
+            correlation_id="corr-003",
+        )
+        status, result = runtime.start(changed)
+        self.assertEqual(status, 409)
+        self.assertEqual(result["error"], "CONTENT_ALREADY_BOUND_TO_PUBLICATION")
+
+    def test_meta_reel_media_limits_fail_closed(self):
+        runtime = self.make_runtime()
+        for overrides in (
+            {"media": {**valid_intent()["media"], "duration_seconds": 2}},
+            {"media": {**valid_intent()["media"], "fps": 22}},
+            {"media": {**valid_intent()["media"], "width": 1921}},
+            {"media": {**valid_intent()["media"], "video_bitrate_bps": 25_000_001}},
+            {"media": {**valid_intent()["media"], "audio_sample_rate_hz": 44_100}},
+            {"media": {**valid_intent()["media"], "audio_bitrate_bps": 128_001}},
+        ):
+            with self.subTest(overrides=overrides):
+                with self.assertRaises(IntentValidationError):
+                    runtime.validate_intent(valid_intent(**overrides))
+
+    def test_publish_requested_after_restart_becomes_unknown_without_retry(self):
+        runtime = self.make_runtime(public=True, enabled=True)
+        intent = runtime.validate_intent(valid_intent())
+        runtime._insert_job(intent, "PUBLISH_REQUESTED")
+        status, result = runtime.reconcile(intent["idempotency_key"])
+        self.assertEqual(status, 409)
+        self.assertEqual(result["status"], "UNKNOWN")
+        self.assertEqual(result["last_error_code"], "PUBLISH_OUTCOME_AMBIGUOUS_AFTER_RESTART")
+
+    def test_unknown_content_cannot_be_republished_with_new_key(self):
+        runtime = self.make_runtime(public=False)
+        intent = runtime.validate_intent(valid_intent())
+        runtime._insert_job(intent, "UNKNOWN")
+        changed = valid_intent(
+            publication_id="pub-unknown-2",
+            idempotency_key="idem-unknown-2",
+            correlation_id="corr-unknown-2",
+        )
+        status, result = runtime.start(changed)
+        self.assertEqual(status, 409)
+        self.assertEqual(result["error"], "CONTENT_ALREADY_BOUND_TO_PUBLICATION")
+
+    def test_unresolved_unknown_blocks_new_publication(self):
+        runtime = self.make_runtime(public=True, enabled=True)
+        old = runtime.validate_intent(valid_intent())
+        runtime._insert_job(old, "UNKNOWN")
+        changed = valid_intent(
+            publication_id="pub-next",
+            content_asset_id="asset-next",
+            asset_sha256="b" * 64,
+            idempotency_key="idem-next",
+            correlation_id="corr-next",
+        )
+        status, result = runtime.start(changed)
+        self.assertEqual(status, 503)
+        self.assertEqual(result["status"], "HOLD_CIRCUIT_OPEN")
+        self.assertEqual(result["last_error_code"], "UNRESOLVED_PUBLICATION_AMBIGUITY")
+
+    def test_machine_publisher_rejects_retargeted_identity(self):
+        runtime = PublisherRuntime(
+            db_connect=lambda: None,
+            load_token_record=lambda: None,
+            graph=lambda *a, **k: (500, {}),
+            expected_username="anotheraccount",
+            expected_professional_user_id="999999999",
+            publish_secret="secret",
+            public_publish_authorized=False,
+            publish_enabled=False,
+            media_host_allowlist=["media.trendradar.com.co"],
+            allowed_markets=["SA"],
+            allowed_languages=["ar"],
+        )
+        self.assertFalse(runtime.configured())
+        _, error = runtime._credential_gate()
+        self.assertEqual(error, "GOVERNED_ACCOUNT_BINDING_INVALID")
+
+    def test_container_create_requested_after_restart_becomes_unknown_without_retry(self):
+        runtime = self.make_runtime(public=True, enabled=True)
+        intent = runtime.validate_intent(valid_intent())
+        runtime._insert_job(intent, "CONTAINER_CREATE_REQUESTED")
+        status, result = runtime.reconcile(intent["idempotency_key"])
+        self.assertEqual(status, 409)
+        self.assertEqual(result["status"], "UNKNOWN")
+        self.assertEqual(
+            result["last_error_code"],
+            "CREATE_CONTAINER_OUTCOME_AMBIGUOUS_AFTER_RESTART",
+        )
+
+    def test_machine_runtime_cannot_be_retargeted_to_another_account(self):
+        runtime = PublisherRuntime(
+            db_connect=lambda: None,
+            load_token_record=lambda: None,
+            graph=lambda *a, **k: (500, {}),
+            expected_username="attacker-account",
+            expected_professional_user_id="999999",
+            publish_secret="secret",
+            public_publish_authorized=True,
+            publish_enabled=True,
+            media_host_allowlist=["media.trendradar.com.co"],
+            allowed_markets=["SA"],
+            allowed_languages=["ar"],
+        )
+        self.assertFalse(runtime.configured())
+        self.assertEqual(runtime.expected_username, "trendradarar")
+        self.assertEqual(
+            runtime.expected_professional_user_id,
+            "17841428134382903",
+        )
+        _, error = runtime._credential_gate()
+        self.assertEqual(error, "GOVERNED_ACCOUNT_BINDING_INVALID")
+
+    def test_new_job_reconciles_after_restart_without_stalling(self):
+        calls = []
+        def graph(method, path, token, **kwargs):
+            calls.append((method, path))
+            if method == "POST" and path.endswith("/media"):
+                return 200, {"id": "container-001"}
+            raise AssertionError((method, path))
+        runtime = self.make_runtime(public=True, enabled=True)
+        runtime.graph = graph
+        intent = runtime.validate_intent(valid_intent())
+        runtime._insert_job(intent, "NEW")
+        status, result = runtime.reconcile(intent["idempotency_key"])
+        self.assertEqual(status, 202)
+        self.assertEqual(result["status"], "CONTAINER_CREATED")
+        self.assertEqual(result["container_id"], "container-001")
+        self.assertEqual(calls, [("POST", "17841428134382903/media")])
+
+    def test_container_create_requested_after_restart_becomes_unknown_without_retry(self):
+        runtime = self.make_runtime(public=True, enabled=True)
+        runtime.graph = lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("provider mutation must not be retried")
+        )
+        intent = runtime.validate_intent(valid_intent())
+        runtime._insert_job(intent, "CONTAINER_CREATE_REQUESTED")
+        status, result = runtime.reconcile(intent["idempotency_key"])
+        self.assertEqual(status, 409)
+        self.assertEqual(result["status"], "UNKNOWN")
+        self.assertEqual(
+            result["last_error_code"],
+            "CREATE_CONTAINER_OUTCOME_AMBIGUOUS_AFTER_RESTART",
+        )
+
+    def test_exact_professional_user_id_is_required(self):
+        runtime = PublisherRuntime(
+            db_connect=lambda: None,
+            load_token_record=lambda: {
+                "username": "trendradarar",
+                "account_type": "BUSINESS",
+                "user_id": "wrong-id",
+                "granted_permissions": [
+                    "instagram_business_basic",
+                    "instagram_business_content_publish",
+                ],
+                "access_token": "token",
+            },
+            graph=lambda *a, **k: (200, {
+                "username": "trendradarar",
+                "account_type": "BUSINESS",
+                "user_id": "wrong-id",
+            }),
+            expected_username="trendradarar",
+            expected_professional_user_id="17841428134382903",
+            publish_secret="secret",
+            public_publish_authorized=False,
+            publish_enabled=False,
+            media_host_allowlist=["media.trendradar.com.co"],
+            allowed_markets=["SA"],
+            allowed_languages=["ar"],
+        )
+        _, error = runtime._credential_gate()
+        self.assertEqual(error, "PROFESSIONAL_USER_ID_MISMATCH")
+
 
 class FlaskBoundaryTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         os.environ["SESSION_SECRET"] = "test-session-secret"
         os.environ["INSTAGRAM_EXPECTED_USERNAME"] = "trendradarar"
+        os.environ["INSTAGRAM_EXPECTED_PROFESSIONAL_USER_ID"] = "17841428134382903"
         os.environ["INSTAGRAM_PUBLIC_PUBLISH_AUTHORIZED"] = "false"
         if "app" in sys.modules:
             del sys.modules["app"]
         cls.module = importlib.import_module("app")
         cls.client = cls.module.app.test_client()
+
+    def setUp(self):
+        self.module.TOKEN_STORE.clear()
+        with self.client.session_transaction() as sess:
+            sess.clear()
+
+    def test_all_backend_oauth_relink_routes_are_hard_disabled(self):
+        probes = (
+            ("get", "/auth/instagram/start"),
+            ("get", "/auth/instagram/callback"),
+            ("get", "/api/public-oauth/start"),
+            ("post", "/api/public-oauth/callback"),
+        )
+        for method, path in probes:
+            with self.subTest(method=method, path=path):
+                response = getattr(self.client, method)(path)
+                self.assertEqual(response.status_code, 423)
+                self.assertEqual(
+                    response.get_json()["error"],
+                    "OAUTH_RELINK_DISABLED_FAIL_CLOSED",
+                )
 
     def test_fresh_browser_cannot_open_share(self):
         response = self.client.get("/share")
@@ -287,6 +571,50 @@ class FlaskBoundaryTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.get_json()["error"], "INVALID_SIGNED_REQUEST")
 
+    def test_public_oauth_state_is_one_time(self):
+        issued = set()
+        original_store = self.module._store_public_oauth_nonce
+        original_consume = self.module._consume_public_oauth_nonce
+        try:
+            self.module._store_public_oauth_nonce = lambda nonce, ttl_seconds=900: (issued.add(nonce) or True)
+            self.module._consume_public_oauth_nonce = lambda nonce: (issued.remove(nonce) is None) if nonce in issued else False
+            state = self.module._make_public_oauth_state()
+            self.assertTrue(state)
+            self.assertIsNotNone(self.module._verify_public_oauth_state(state))
+            self.assertIsNone(self.module._verify_public_oauth_state(state))
+        finally:
+            self.module._store_public_oauth_nonce = original_store
+            self.module._consume_public_oauth_nonce = original_consume
+
+    def test_browser_review_flow_cannot_mutate_when_no_publish(self):
+        with self.client.session_transaction() as sess:
+            sess["instagram_owner_verified"] = True
+            sess["sid"] = "owner-test"
+        self.module.TOKEN_STORE["owner-test"] = {
+            "username": "trendradarar",
+            "user_id": "17841428134382903",
+            "account_type": "BUSINESS",
+        }
+        response = self.client.post("/api/reel", data={"consent": "true"})
+        self.assertEqual(response.status_code, 423)
+        self.assertEqual(response.get_json()["error"], "INSTAGRAM_MUTATIONS_DISABLED")
+
+    def test_all_backend_oauth_linking_routes_are_hard_disabled(self):
+        checks = (
+            ("get", "/auth/instagram/start"),
+            ("get", "/auth/instagram/callback"),
+            ("get", "/api/public-oauth/start"),
+            ("post", "/api/public-oauth/callback"),
+        )
+        for method, path in checks:
+            with self.subTest(path=path):
+                response = getattr(self.client, method)(path)
+                self.assertEqual(response.status_code, 423)
+                self.assertEqual(
+                    response.get_json()["error"],
+                    "OAUTH_RELINK_DISABLED_FAIL_CLOSED",
+                )
+
     def test_health_keeps_public_publish_closed(self):
         response = self.client.get("/health")
         self.assertEqual(response.status_code, 200)
@@ -294,6 +622,8 @@ class FlaskBoundaryTests(unittest.TestCase):
         self.assertFalse(body["public_publish_authorized"])
         self.assertFalse(body["instagram_publish_enabled"])
         self.assertFalse(body["browser_public_publish_enabled"])
+        self.assertTrue(body["exact_account_binding_configured"])
+        self.assertTrue(body["oauth_relink_hard_disabled"])
 
 
 if __name__ == "__main__":
