@@ -9,6 +9,7 @@ on:
       - "snapchat_publisher_service/**"
       - "snapchat_oauth_service/**"
       - ".github/workflows/snapchat-publisher-ci.yml"
+      - ".github/scripts/snapchat_secret_scan.py"
   workflow_dispatch:
 
 permissions:
@@ -80,24 +81,8 @@ jobs:
           SNAPCHAT_TEST_POSTGRES_URL: postgresql://snapchat:snapchat_ci_only@127.0.0.1:5432/snapchat_test
         run: python -m unittest -v test_postgres_integration.py
 
-      - name: Verify no obvious credential material in current tree
-        shell: bash
-        run: |
-          set -euo pipefail
-          ! grep -R -nE 'BEGIN (RSA|OPENSSH|EC) PRIVATE KEY' snapchat_publisher_service snapchat_oauth_service
-          ! grep -R -nE 'AKIA[0-9A-Z]{16}' snapchat_publisher_service snapchat_oauth_service
-          ! grep -R -nE '(client_secret|refresh_token|access_token)[[:space:]]*=[[:space:]]*["'''][^"''']{12,}["''']' snapchat_publisher_service snapchat_oauth_service
-          echo "Current-tree credential pattern scan passed."
+      - name: Verify no credential material in current Snapchat tree
+        run: python .github/scripts/snapchat_secret_scan.py current-tree
 
-      - name: Verify no obvious credential material in Snapchat git history
-        shell: bash
-        run: |
-          set -euo pipefail
-          tmp="$(mktemp)"
-          git log --all -p -- snapchat_publisher_service snapchat_oauth_service > "$tmp"
-          if grep -nE 'BEGIN (RSA|OPENSSH|EC) PRIVATE KEY|AKIA[0-9A-Z]{16}' "$tmp"; then
-            echo "Potential credential material found in Snapchat history."
-            exit 1
-          fi
-          rm -f "$tmp"
-          echo "Basic Snapchat git-history credential scan passed."
+      - name: Verify no credential material in Snapchat git history
+        run: python .github/scripts/snapchat_secret_scan.py history
