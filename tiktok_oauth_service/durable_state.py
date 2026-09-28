@@ -464,7 +464,59 @@ class DurableState:
             con.execute("DELETE FROM handoffs WHERE expires_at<=? OR consumed_at IS NOT NULL", (now,))
             con.execute("DELETE FROM sessions WHERE expires_at<=?", (now,))
 
+    def backup_to(self, destination_path):
+        destination = Path(str(destination_path or "")).expanduser()
+        if not str(destination_path or "").strip():
+            raise DurableStateError("backup destination is required")
+        if not destination.is_absolute():
+            raise DurableStateError("backup destination must be absolute")
+        if destination == self._db_path:
+            raise DurableStateError("backup destination must differ from live database")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if destination.exists():
+            raise DurableStateError("backup destination already exists")
+        with self._lock, closing(self._connect()) as source:
+            with closing(sqlite3.connect(str(destination), timeout=10)) as target:
+                source.backup(target)
+                check = target.execute("PRAGMA quick_check").fetchone()
+                if not check or str(check[0]).lower() != "ok":
+                    raise DurableStateError("backup integrity check failed")
+        try:
+            os.chmod(destination, 0o600)
+        except OSError:
+            pass
+        digest = hashlib.sha256(destination.read_bytes()).hexdigest()
+        return {"path": str(destination), "sha256": digest}
+
+    @classmethod
+    def restore_backup(cls, backup_path, target_path, encryption_keys):
+        source_path = Path(str(backup_path or "")).expanduser()
+        target_path = Path(str(target_path or "")).expanduser()
+        if not source_path.is_absolute() or not target_path.is_absolute():
+            raise DurableStateError("backup and restore paths must be absolute")
+        if not source_path.exists() or not source_path.is_file():
+            raise DurableStateError("backup source does not exist")
+        if target_path.exists():
+            raise DurableStateError("restore target already exists")
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        with closing(sqlite3.connect(str(source_path), timeout=10)) as source:
+            check = source.execute("PRAGMA quick_check").fetchone()
+            if not check or str(check[0]).lower() != "ok":
+                raise DurableStateError("backup source integrity check failed")
+            with closing(sqlite3.connect(str(target_path), timeout=10)) as target:
+                source.backup(target)
+                check2 = target.execute("PRAGMA quick_check").fetchone()
+                if not check2 or str(check2[0]).lower() != "ok":
+                    raise DurableStateError("restored database integrity check failed")
+        try:
+            os.chmod(target_path, 0o600)
+        except OSError:
+            pass
+        return cls(str(target_path), encryption_keys)
+
     def health(self):
         with self._lock, closing(self._connect()) as con:
-            con.execute("SELECT 1").fetchone()
+            check = con.execute("PRAGMA quick_check").fetchone()
+            if not check or str(check[0]).lower() != "ok":
+                raise DurableStateError("database integrity check failed")
         return {"ok": True, "backend": "sqlite", "path_configured": True}
