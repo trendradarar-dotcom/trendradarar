@@ -278,3 +278,33 @@ A cold engineer must be able to:
 12. demonstrate no duplicate post after restore.
 
 If these actions require the original developer/chat/AI beyond documented credentials held by the owner, maintainability/recoverability remains NOT VERIFIED.
+
+
+## 19. Production qualification tooling
+
+Prepared producer tooling:
+- `tools/tiktok_recovery_qualification.py`
+  - writes an encrypted recovery marker;
+  - verifies the marker after process/backend reopen;
+  - creates an integrity-checked backup with SHA-256;
+  - restores to an isolated target and verifies the same marker;
+  - cleans up the qualification marker.
+- `tools/tiktok_ops_watchdog.py`
+  - consumes secret-free `/ops/health`;
+  - treats unreachable/degraded/UNKNOWN/stale conditions as attention-required;
+  - sends an HMAC-SHA256 signed JSON alert to an HTTPS webhook;
+  - does not include OAuth/client secrets in the alert payload.
+
+These tools are qualification aids only. They do not prove production persistence or external alert delivery until exercised independently against the deployed production architecture.
+
+See:
+- `review/tiktok/TIKTOK_PRODUCTION_ADMISSION_GATE_20260929.md`
+- `review/tiktok/TIKTOK_COLD_ENGINEER_HANDOVER_QUALIFICATION_20260929.md`
+
+## 20. Isolation rule for production state
+
+No dedicated TikTok production database is currently evidenced.
+
+Existing data stores belonging to any non-TikTok channel/project are OUT OF SCOPE and MUST NOT be reused for TikTok state, backup, recovery, or alert deduplication.
+
+Any future TikTok state backend must be dedicated to the TikTok integration or explicitly partitioned and independently reviewed as TikTok-owned infrastructure.
