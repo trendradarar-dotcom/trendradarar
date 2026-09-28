@@ -1,0 +1,10 @@
+--only-binary=:all:
+
+av==18.1.0 \
+    --hash=sha256:8a032e8d8ebc73dec079364b9b4a6837638a2d106e8472314e685ffbf163e700
+cryptography==46.0.1 \
+    --hash=sha256:449ef2b321bec7d97ef2c944173275ebdab78f3abdd005400cc409e27cd159ab
+cffi==2.1.1 \
+    --hash=sha256:c1453022f490d2459a11819d83ad1d586e9ff65a12ac3e705ffebd46d3685dcf
+pycparser==3.0 \
+    --hash=sha256:b727414169a36b7d524c1c3e31839a521725078d7b2ff038656844266160a992
