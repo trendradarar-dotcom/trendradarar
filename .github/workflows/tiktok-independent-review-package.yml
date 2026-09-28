@@ -27,7 +27,7 @@ jobs:
       - name: Checkout review handoff instructions
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: 7a76ed1b5a3dd6a61caa83f88bd93fdfeb271795
+          ref: 9d8a2124886a8d0592b50f4ac06c617e659a2ff5
           path: handoff_repo
           fetch-depth: 1
           persist-credentials: false
@@ -36,7 +36,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          PACKAGE="TrendRadar-TikTok-Independent-Review-Package-20260928-ExactTarget-v2-acb5aff7"
+          PACKAGE="TrendRadar-TikTok-Independent-Review-Package-20260928-ExactTarget-v3-acb5aff7"
           mkdir -p "$PACKAGE/exact_target"
           mkdir -p "$PACKAGE/candidate"
           mkdir -p "$PACKAGE/producer_evidence"
@@ -65,6 +65,28 @@ jobs:
           cp handoff_repo/review/tiktok/TIKTOK_REVIEWER_ACTIONS_AR_20260928.md "$PACKAGE/REVIEWER_ACTIONS_AR.md"
           cp handoff_repo/review/tiktok/EXACT_TARGET_REOPEN_INSTRUCTIONS_20260928.md "$PACKAGE/EXACT_TARGET_REOPEN_INSTRUCTIONS.md"
 
+          # Producer-side self-check only; reviewer must reproduce independently.
+          BUNDLE_ABS="$PWD/$PACKAGE/exact_target/TikTok-Exact-Target-acb5aff7.bundle"
+          SNAPSHOT_ABS="$PWD/$PACKAGE/exact_target/full-repository-snapshot.tar"
+          rm -rf producer_bundle_verify producer_bundle_clone producer_snapshot_check
+          git init -q producer_bundle_verify
+          git -C producer_bundle_verify bundle verify "$BUNDLE_ABS" > "$PWD/$PACKAGE/producer_evidence/EXACT_TARGET_REPRODUCIBILITY_CHECK.txt" 2>&1
+          git clone -q "$BUNDLE_ABS" producer_bundle_clone
+          {
+            echo "BUNDLE_CLONE_HEAD=$(git -C producer_bundle_clone rev-parse HEAD)"
+            echo "BUNDLE_CLONE_TREE=$(git -C producer_bundle_clone rev-parse 'HEAD^{tree}')"
+          } >> "$PWD/$PACKAGE/producer_evidence/EXACT_TARGET_REPRODUCIBILITY_CHECK.txt"
+          mkdir -p producer_snapshot_check
+          tar -xf "$SNAPSHOT_ABS" -C producer_snapshot_check
+          git -C producer_snapshot_check init -q
+          git -C producer_snapshot_check config core.autocrlf false
+          git -C producer_snapshot_check add -A
+          SNAPSHOT_TREE="$(git -C producer_snapshot_check write-tree)"
+          echo "SNAPSHOT_RECONSTRUCTED_TREE=$SNAPSHOT_TREE" >> "$PWD/$PACKAGE/producer_evidence/EXACT_TARGET_REPRODUCIBILITY_CHECK.txt"
+          test "$(git -C producer_bundle_clone rev-parse HEAD)" = "acb5aff7a79de29f82c150428d29136148b51b36"
+          test "$(git -C producer_bundle_clone rev-parse 'HEAD^{tree}')" = "56694a061bbd5ca09f1d8db8e014e04200258403"
+          test "$SNAPSHOT_TREE" = "56694a061bbd5ca09f1d8db8e014e04200258403"
+
           cat > "$PACKAGE/EXACT_TARGET.txt" <<'EOF'
           PROJECT=TrendHunter / Trend Radar
           SCOPE=TikTok only
@@ -82,7 +104,7 @@ jobs:
           cat > "$PACKAGE/START_HERE.md" <<'EOF'
           # START HERE — Independent Reviewer
 
-          This is replacement package v2 created only to cure the prior Evidence/Target Binding failure.
+          This is replacement package v3 created only to cure the prior Evidence/Target Binding failure.
 
           1. Read EXACT_TARGET_REOPEN_INSTRUCTIONS.md FIRST.
           2. Independently run git bundle verify on exact_target/TikTok-Exact-Target-acb5aff7.bundle.
@@ -125,10 +147,10 @@ jobs:
       - name: Upload exact-target independent review package
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: TrendRadar-TikTok-Independent-Review-Package-20260928-ExactTarget-v2-acb5aff7
+          name: TrendRadar-TikTok-Independent-Review-Package-20260928-ExactTarget-v3-acb5aff7
           path: |
-            TrendRadar-TikTok-Independent-Review-Package-20260928-ExactTarget-v2-acb5aff7.zip
-            TrendRadar-TikTok-Independent-Review-Package-20260928-ExactTarget-v2-acb5aff7.zip.sha256
+            TrendRadar-TikTok-Independent-Review-Package-20260928-ExactTarget-v3-acb5aff7.zip
+            TrendRadar-TikTok-Independent-Review-Package-20260928-ExactTarget-v3-acb5aff7.zip.sha256
           if-no-files-found: error
           compression-level: 0
           retention-days: 30
