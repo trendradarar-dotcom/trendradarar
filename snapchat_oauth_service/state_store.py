@@ -277,8 +277,8 @@ class DurableStateStore:
         return {
             "persisted": bool(row),
             "connected": bool(row and int(row.get("connected") or 0) == 1),
-            "refresh_present": bool(row and row.get("refresh_cipher")),
-            "access_present": bool(row and row.get("access_cipher")),
+            "refresh_credential_present": bool(row and row.get("refresh_cipher")),
+            "access_credential_present": bool(row and row.get("access_cipher")),
             "expires_at": row.get("expires_at") if row else None,
             "scope": row.get("scope") if row else None,
             "profile_id": row.get("profile_id") if row else None,
