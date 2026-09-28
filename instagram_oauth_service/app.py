@@ -1019,7 +1019,7 @@ textarea{{width:100%;min-height:100px}} input[type=file]{{width:100%}}
 Public publication is currently <strong>{"ENABLED" if PUBLIC_PUBLISH_AUTHORIZED else "DISABLED"}</strong>.
 When disabled, Trend Radar creates and verifies the Reel container but does not call media_publish.
 </div>
-<p><a href="/disconnect">Disconnect</a></p>
+<form method="post" action="/disconnect"><button type="submit">Disconnect</button></form>
 </body></html>"""
 
 
@@ -1235,7 +1235,7 @@ def media(media_id):
     return send_file(path, mimetype="video/mp4", conditional=True)
 
 
-@app.get("/disconnect")
+@app.post("/disconnect")
 def disconnect():
     if not _owner_session_verified():
         return jsonify({"ok": False, "error": "OWNER_SESSION_REQUIRED"}), 403
