@@ -223,7 +223,7 @@ class DirectBridgeRemediationTests(unittest.TestCase):
 
             second = self.client.post(
                 "/spotlight/publish",
-                data={**form, "video": (io.BytesIO(b"same-video"), "video.mp4", "video/mp4")},
+                data={**form, "video": (io.BytesIO(b"not-a-real-video-but-probe-is-mocked"), "video.mp4", "video/mp4")},
                 headers={"X-Owner-Key": "owner-key"},
                 content_type="multipart/form-data",
             )
@@ -264,7 +264,7 @@ class DirectBridgeRemediationTests(unittest.TestCase):
 
             second = self.client.post(
                 "/spotlight/publish",
-                data={**form, "video": (io.BytesIO(b"video-b"), "video.mp4", "video/mp4")},
+                data={**form, "video": (io.BytesIO(b"video-a"), "video.mp4", "video/mp4")},
                 headers={"X-Owner-Key": "owner-key"},
                 content_type="multipart/form-data",
             )
