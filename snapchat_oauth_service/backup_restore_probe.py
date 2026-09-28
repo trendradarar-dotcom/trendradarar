@@ -15,7 +15,9 @@ def seed(url: str) -> None:
     admission = store.begin_publication(
         profile_id=PROFILE_ID,
         publication_id=PUBLICATION_ID,
-        correlation_id="backup-restore-correlation-0001",
+undefinedcontent_id="content-backup-restore-0001",
+undefinedjob_id="job-backup-restore-0001",
+        "backup-restore-correlation-0001",
         description="backup-restore-evidence",
         media_sha256="b" * 64,
         duration=35.0,
@@ -72,7 +74,9 @@ def verify(url: str) -> None:
     duplicate = store.begin_publication(
         profile_id=PROFILE_ID,
         publication_id=PUBLICATION_ID,
-        correlation_id="backup-restore-correlation-0002",
+undefinedcontent_id="content-backup-restore-0001",
+undefinedjob_id="job-backup-restore-0001",
+        "backup-restore-correlation-0002",
         description="backup-restore-evidence",
         media_sha256="b" * 64,
         duration=35.0,
