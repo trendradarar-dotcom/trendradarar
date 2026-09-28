@@ -69,6 +69,46 @@ class DurableStateTests(unittest.TestCase):
         only_new = DurableState(self.db, [new_key])
         self.assertEqual(only_new.get_session("sid", now=4, touch=False)["access_token"], "new")
 
+    def test_publication_idempotency_is_persistent(self):
+        rec, created = self.store.create_publication_intent(
+            "idem-1","a"*64,"acct-hash","DIRECT_POST","b"*64,now=4000
+        )
+        self.assertTrue(created)
+        self.assertEqual(rec["state"], "RECEIVED")
+        same, created2 = self.store.create_publication_intent(
+            "idem-1","a"*64,"acct-hash","DIRECT_POST","b"*64,now=4001
+        )
+        self.assertFalse(created2)
+        self.assertEqual(same["idempotency_key"], "idem-1")
+        reopened = DurableState(self.db, [self.key])
+        self.assertEqual(reopened.get_publication("idem-1")["state"], "RECEIVED")
+
+    def test_publication_state_machine_rejects_invalid_transition(self):
+        self.store.create_publication_intent(
+            "idem-2","c"*64,"acct-hash","DIRECT_POST","d"*64,now=5000
+        )
+        self.store.transition_publication("idem-2","VALIDATED",now=5001)
+        self.store.transition_publication("idem-2","SAFETY_APPROVED",now=5002)
+        self.store.transition_publication("idem-2","PUBLISH_REQUESTED",now=5003)
+        self.store.transition_publication("idem-2","UPLOAD_STARTED",now=5004,provider_publish_id="pub-1")
+        self.store.transition_publication("idem-2","UPLOADED",now=5005)
+        self.store.transition_publication("idem-2","PROCESSING",now=5006)
+        self.store.transition_publication("idem-2","PUBLISHED",now=5007)
+        self.assertEqual(self.store.get_publication_by_provider_id("pub-1")["state"], "PUBLISHED")
+        with self.assertRaises(DurableStateError):
+            self.store.transition_publication("idem-2","UPLOAD_STARTED",now=5008)
+
+    def test_publication_attempt_counter_is_durable(self):
+        self.store.create_publication_intent(
+            "idem-3","e"*64,"acct-hash","DRAFT_UPLOAD","f"*64,now=6000
+        )
+        first = self.store.begin_publication_attempt("idem-3",now=6001)
+        second = self.store.begin_publication_attempt("idem-3",now=6002)
+        self.assertEqual(first["attempt_count"], 1)
+        self.assertEqual(second["attempt_count"], 2)
+        reopened = DurableState(self.db, [self.key])
+        self.assertEqual(reopened.get_publication("idem-3")["attempt_count"], 2)
+
     def test_tamper_fails_closed(self):
         self.store.upsert_session("sid", {"access_token": "x"}, now=1, ttl=100)
         with closing(sqlite3.connect(self.db)) as con:
