@@ -109,6 +109,39 @@ class DurableStateTests(unittest.TestCase):
         reopened = DurableState(self.db, [self.key])
         self.assertEqual(reopened.get_publication("idem-3")["attempt_count"], 2)
 
+    def test_hard_limit_blocks_second_active_mutation(self):
+        self.store.create_publication_intent(
+            "idem-a","1"*64,"acct","DIRECT_POST","2"*64,now=7000
+        )
+        ok, reason = self.store.admit_publication("idem-a",6,24,1,2,now=7001)
+        self.assertTrue(ok); self.assertIsNone(reason)
+        self.store.create_publication_intent(
+            "idem-b","3"*64,"acct","DIRECT_POST","4"*64,now=7002
+        )
+        ok2, reason2 = self.store.admit_publication("idem-b",6,24,1,2,now=7003)
+        self.assertFalse(ok2)
+        self.assertEqual(reason2, "active_account_limit")
+        self.assertEqual(self.store.get_publication("idem-b")["state"], "FAILED")
+
+    def test_hourly_hard_limit_persists_after_terminal_success(self):
+        self.store.create_publication_intent(
+            "idem-c","5"*64,"acct2","DIRECT_POST","6"*64,now=8000
+        )
+        ok, _ = self.store.admit_publication("idem-c",1,24,2,4,now=8001)
+        self.assertTrue(ok)
+        self.store.transition_publication("idem-c","SAFETY_APPROVED",now=8002)
+        self.store.transition_publication("idem-c","PUBLISH_REQUESTED",now=8003)
+        self.store.transition_publication("idem-c","UPLOAD_STARTED",now=8004,provider_publish_id="pub-c")
+        self.store.transition_publication("idem-c","UPLOADED",now=8005)
+        self.store.transition_publication("idem-c","PROCESSING",now=8006)
+        self.store.transition_publication("idem-c","PUBLISHED",now=8007)
+        self.store.create_publication_intent(
+            "idem-d","7"*64,"acct2","DIRECT_POST","8"*64,now=8008
+        )
+        ok2, reason2 = self.store.admit_publication("idem-d",1,24,2,4,now=8009)
+        self.assertFalse(ok2)
+        self.assertEqual(reason2, "hourly_account_limit")
+
     def test_tamper_fails_closed(self):
         self.store.upsert_session("sid", {"access_token": "x"}, now=1, ttl=100)
         with closing(sqlite3.connect(self.db)) as con:
