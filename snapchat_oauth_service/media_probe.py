@@ -1,5 +1,5 @@
 from contextlib import suppress
-import subprocess
+import subprocess  # nosec B404 -- fixed ffmpeg executable; shell is never invoked
 from typing import Any, Dict
 
 import imageio_ffmpeg
@@ -36,9 +36,12 @@ def _verify_full_video_stream(path: str) -> None:
         "-",
     ]
     try:
-        result = subprocess.run(
+        # The executable is obtained from the pinned imageio-ffmpeg package and
+        # the media path is passed as one argv element. shell=False is explicit.
+        result = subprocess.run(  # nosec B603
             command,
             check=False,
+            shell=False,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             timeout=FULL_STREAM_TIMEOUT_SECONDS,
