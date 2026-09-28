@@ -23,15 +23,19 @@ class GatewayBoundaryTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.get_json()["configured"])
 
-    def test_machine_oauth_start_rejects_missing_origin(self):
-        response = self.client.get("/oauth/start")
-        self.assertEqual(response.status_code, 403)
-        self.assertEqual(response.get_json()["error"], "ORIGIN_NOT_ALLOWED")
-
-    def test_machine_oauth_callback_rejects_missing_origin(self):
-        response = self.client.post("/oauth/callback", json={})
-        self.assertEqual(response.status_code, 403)
-        self.assertEqual(response.get_json()["error"], "ORIGIN_NOT_ALLOWED")
+    def test_gateway_oauth_is_hard_disabled_fail_closed(self):
+        for method, path in (
+            ("get", "/oauth/browser/start"),
+            ("get", "/oauth/browser/callback"),
+            ("get", "/oauth/start"),
+            ("post", "/oauth/callback"),
+        ):
+            response = getattr(self.client, method)(path)
+            self.assertEqual(response.status_code, 423)
+            self.assertEqual(
+                response.get_json()["error"],
+                "OAUTH_BROWSER_DISABLED_FAIL_CLOSED",
+            )
 
     def test_security_headers_are_fail_closed(self):
         response = self.client.get("/health")
