@@ -57,6 +57,20 @@ def audit_approved():
 def fingerprint(v):
     return hashlib.sha256(v.encode()).hexdigest() if v else ""
 
+def content_fingerprint(blob):
+    return hashlib.sha256(blob).hexdigest()
+
+def publication_identity(sess, operation, video, metadata):
+    account_hash=fingerprint(str(sess.get("open_id","")))
+    content_hash=content_fingerprint(video)
+    metadata_raw=json.dumps(metadata,separators=(",",":"),sort_keys=True,ensure_ascii=False)
+    metadata_hash=fingerprint(metadata_raw)
+    idempotency_key=fingerprint(account_hash+"|"+operation+"|"+content_hash)
+    return idempotency_key,content_hash,account_hash,metadata_hash
+
+def unknown_provider_outcome(http_status):
+    return (not http_status) or int(http_status)>=500
+
 def api_json_post(url, token, payload=None, timeout=25):
     body=json.dumps(payload or {}).encode("utf-8")
     req=urllib.request.Request(
@@ -666,12 +680,13 @@ async function poll(id,s){{
         q=urllib.parse.parse_qs(p.query,keep_blank_values=True)
         if q.get("consent",["false"])[0]!="true":
             return self.js(400,{"error":"explicit_consent_required"})
-        try: length=int(self.headers.get("Content-Length","0"))
-        except Exception: length=0
+        try:
+            length=int(self.headers.get("Content-Length","0"))
+        except Exception:
+            length=0
         if length<=0 or length>MAX_UPLOAD_BYTES:
             return self.js(400,{"error":"invalid_file_size","max_bytes":MAX_UPLOAD_BYTES})
-        ctype=self.headers.get("Content-Type","")
-        if ctype!="video/mp4":
+        if self.headers.get("Content-Type","")!="video/mp4":
             return self.js(400,{"error":"mp4_required"})
         title=q.get("title",[""])[0][:2200]
         privacy=q.get("privacy",[""])[0]
@@ -679,15 +694,14 @@ async function poll(id,s){{
         allow_duet=q.get("allow_duet",["false"])[0]=="true"
         allow_stitch=q.get("allow_stitch",["false"])[0]=="true"
 
-        print(f"POST_STAGE reading_body length={length}", flush=True)
         video=self.rfile.read(length)
-        print(f"POST_STAGE body_read bytes={len(video)}", flush=True)
+        if len(video)!=length:
+            return self.js(400,{"error":"incomplete_upload_body"})
         duration=mp4_duration_seconds(video)
         if duration<=0:
             return self.js(400,{"error":"invalid_mp4_or_duration_unreadable"})
-        print("POST_STAGE querying_creator", flush=True)
+
         ok,status,creator,err=query_creator(sess["access_token"])
-        print(f"POST_STAGE creator_result ok={ok} http={status}", flush=True)
         if not ok:
             return self.js(502,{"error":"creator_info_failed","provider_code":err.get("code"),"http_status":status})
         options=list(creator.get("privacy_level_options") or [])
@@ -700,7 +714,7 @@ async function poll(id,s){{
             return self.js(400,{"error":"unaudited_self_only_required"})
         if privacy not in options:
             return self.js(400,{"error":"privacy_not_allowed","allowed":options})
-        if duration<=0 or (max_sec and duration>max_sec):
+        if max_sec and duration>max_sec:
             return self.js(400,{"error":"duration_not_allowed","max_sec":max_sec})
         if creator.get("comment_disabled") and allow_comment:
             return self.js(400,{"error":"comments_disabled_by_creator"})
@@ -708,6 +722,38 @@ async function poll(id,s){{
             return self.js(400,{"error":"duet_disabled_by_creator"})
         if creator.get("stitch_disabled") and allow_stitch:
             return self.js(400,{"error":"stitch_disabled_by_creator"})
+
+        store=state_store()
+        if store is None:
+            return self.js(503,{"error":"durable_state_required"})
+        metadata={
+            "privacy":privacy,
+            "title":title,
+            "allow_comment":allow_comment,
+            "allow_duet":allow_duet,
+            "allow_stitch":allow_stitch,
+            "duration":duration,
+            "size":length,
+        }
+        idem,content_hash,account_hash,metadata_hash=publication_identity(
+            sess,"DIRECT_POST",video,metadata
+        )
+        try:
+            record,created=store.create_publication_intent(
+                idem,content_hash,account_hash,"DIRECT_POST",metadata_hash
+            )
+            if not created:
+                return self.js(409,{
+                    "error":"duplicate_publication_intent",
+                    "state":record.get("state"),
+                    "publish_id":record.get("provider_publish_id"),
+                })
+            store.transition_publication(idem,"VALIDATED")
+            store.transition_publication(idem,"SAFETY_APPROVED")
+            store.begin_publication_attempt(idem)
+            store.transition_publication(idem,"PUBLISH_REQUESTED")
+        except DurableStateError:
+            return self.js(503,{"error":"publication_ledger_failed"})
 
         post_info={
             "title":title,
@@ -722,42 +768,84 @@ async function poll(id,s){{
             "post_info":post_info,
             "source_info":{"source":"FILE_UPLOAD","video_size":length,"chunk_size":length,"total_chunk_count":1},
         }
-        print("POST_STAGE initializing_direct_post", flush=True)
         st,init=api_json_post(DIRECT_POST_INIT_URL,sess["access_token"],init_payload)
-        print(f"POST_STAGE init_result http={st} code={((init.get('error') or {}).get('code') if isinstance(init,dict) else 'invalid')}", flush=True)
         ierr=(init.get("error") or {}) if isinstance(init,dict) else {}
         data=(init.get("data") or {}) if isinstance(init,dict) else {}
         if not (st==200 and ierr.get("code")=="ok"):
+            try:
+                store.transition_publication(
+                    idem,
+                    "UNKNOWN" if unknown_provider_outcome(st) else "FAILED",
+                    error_code=str(ierr.get("code") or st or "provider_unknown"),
+                )
+            except DurableStateError:
+                pass
             return self.js(502,{"error":"direct_post_init_failed","provider":ierr,"http_status":st})
         upload_url=str(data.get("upload_url") or "")
         publish_id=str(data.get("publish_id") or "")
         if not upload_url or not publish_id:
+            try:
+                store.transition_publication(idem,"UNKNOWN",error_code="missing_upload_target")
+            except DurableStateError:
+                pass
             return self.js(502,{"error":"missing_upload_target"})
+        try:
+            store.transition_publication(idem,"UPLOAD_STARTED",provider_publish_id=publish_id)
+        except DurableStateError:
+            return self.js(503,{"error":"publication_ledger_provider_binding_failed"})
 
-        print("POST_STAGE uploading_binary", flush=True)
         req=urllib.request.Request(
             upload_url,data=video,
-            headers={"Content-Type":"video/mp4","Content-Length":str(length),"Content-Range":f"bytes 0-{length-1}/{length}"},
+            headers={
+                "Content-Type":"video/mp4",
+                "Content-Length":str(length),
+                "Content-Range":f"bytes 0-{length-1}/{length}",
+            },
             method="PUT",
         )
         try:
             with urllib.request.urlopen(req,timeout=60) as r:
-                upload_status=r.status; r.read()
+                upload_status=r.status
+                r.read()
         except urllib.error.HTTPError as e:
-            upload_status=e.code; e.read()
+            upload_status=e.code
+            e.read()
         except Exception:
+            try:
+                store.transition_publication(idem,"UNKNOWN",error_code="upload_unreachable")
+            except DurableStateError:
+                pass
             return self.js(502,{"error":"upload_unreachable"})
-        print(f"POST_STAGE upload_result http={upload_status}", flush=True)
+
         if not (200<=upload_status<300):
+            try:
+                store.transition_publication(
+                    idem,
+                    "UNKNOWN" if upload_status>=500 else "FAILED",
+                    error_code=f"upload_http_{upload_status}",
+                )
+            except DurableStateError:
+                pass
             return self.js(502,{"error":"binary_upload_failed","http_status":upload_status})
-        store=state_store()
-        if store is None:
-            return self.js(503,{"error":"durable_state_required"})
+
         try:
+            store.transition_publication(idem,"UPLOADED")
+            store.transition_publication(idem,"PROCESSING")
             store.patch_session(sid,{"last_publish_id":publish_id},ttl=SESSION_TTL)
         except DurableStateError:
-            return self.js(503,{"error":"durable_state_failed"})
-        return self.js(201,{"ok":True,"publish_id":publish_id,"privacy_requested":privacy,"public_client_approved":approved})
+            return self.js(503,{
+                "error":"publication_state_persist_failed",
+                "publish_id":publish_id,
+                "idempotency_key":idem,
+            })
+        return self.js(201,{
+            "ok":True,
+            "publish_id":publish_id,
+            "privacy_requested":privacy,
+            "public_client_approved":approved,
+            "idempotency_key":idem,
+            "local_state":"PROCESSING",
+        })
 
     def upload_draft(self,p):
         sid,sess=self.get_session()
@@ -768,16 +856,21 @@ async function poll(id,s){{
         q=urllib.parse.parse_qs(p.query,keep_blank_values=True)
         if q.get("consent",["false"])[0]!="true":
             return self.js(400,{"error":"explicit_consent_required"})
-        try: length=int(self.headers.get("Content-Length","0"))
-        except Exception: length=0
+        try:
+            length=int(self.headers.get("Content-Length","0"))
+        except Exception:
+            length=0
         if length<=0 or length>MAX_UPLOAD_BYTES:
             return self.js(400,{"error":"invalid_file_size","max_bytes":MAX_UPLOAD_BYTES})
         if self.headers.get("Content-Type","")!="video/mp4":
             return self.js(400,{"error":"mp4_required"})
         video=self.rfile.read(length)
+        if len(video)!=length:
+            return self.js(400,{"error":"incomplete_upload_body"})
         duration=mp4_duration_seconds(video)
         if duration<=0:
             return self.js(400,{"error":"invalid_mp4_or_duration_unreadable"})
+
         ok,status,creator,err=query_creator(sess["access_token"])
         if not ok:
             return self.js(502,{"error":"creator_info_failed","provider_code":err.get("code"),"http_status":status})
@@ -785,48 +878,115 @@ async function poll(id,s){{
         if max_sec and duration>max_sec:
             return self.js(400,{"error":"duration_not_allowed","max_sec":max_sec})
 
+        store=state_store()
+        if store is None:
+            return self.js(503,{"error":"durable_state_required"})
+        metadata={"duration":duration,"size":length}
+        idem,content_hash,account_hash,metadata_hash=publication_identity(
+            sess,"DRAFT_UPLOAD",video,metadata
+        )
+        try:
+            record,created=store.create_publication_intent(
+                idem,content_hash,account_hash,"DRAFT_UPLOAD",metadata_hash
+            )
+            if not created:
+                return self.js(409,{
+                    "error":"duplicate_publication_intent",
+                    "state":record.get("state"),
+                    "publish_id":record.get("provider_publish_id"),
+                })
+            store.transition_publication(idem,"VALIDATED")
+            store.transition_publication(idem,"SAFETY_APPROVED")
+            store.begin_publication_attempt(idem)
+            store.transition_publication(idem,"PUBLISH_REQUESTED")
+        except DurableStateError:
+            return self.js(503,{"error":"publication_ledger_failed"})
+
         init_payload={
             "source_info":{
                 "source":"FILE_UPLOAD",
                 "video_size":length,
                 "chunk_size":length,
-                "total_chunk_count":1
+                "total_chunk_count":1,
             }
         }
-        print("DRAFT_STAGE init", flush=True)
         st,init=api_json_post(UPLOAD_DRAFT_INIT_URL,sess["access_token"],init_payload)
         ierr=(init.get("error") or {}) if isinstance(init,dict) else {}
         data=(init.get("data") or {}) if isinstance(init,dict) else {}
-        print(f"DRAFT_STAGE init_http={st} code={ierr.get('code')}", flush=True)
         if not (st==200 and ierr.get("code")=="ok"):
+            try:
+                store.transition_publication(
+                    idem,
+                    "UNKNOWN" if unknown_provider_outcome(st) else "FAILED",
+                    error_code=str(ierr.get("code") or st or "provider_unknown"),
+                )
+            except DurableStateError:
+                pass
             return self.js(502,{"error":"draft_init_failed","provider":ierr,"http_status":st})
         upload_url=str(data.get("upload_url") or "")
         publish_id=str(data.get("publish_id") or "")
         if not upload_url or not publish_id:
+            try:
+                store.transition_publication(idem,"UNKNOWN",error_code="missing_upload_target")
+            except DurableStateError:
+                pass
             return self.js(502,{"error":"missing_upload_target"})
+        try:
+            store.transition_publication(idem,"UPLOAD_STARTED",provider_publish_id=publish_id)
+        except DurableStateError:
+            return self.js(503,{"error":"publication_ledger_provider_binding_failed"})
+
         req=urllib.request.Request(
             upload_url,data=video,
-            headers={"Content-Type":"video/mp4","Content-Length":str(length),"Content-Range":f"bytes 0-{length-1}/{length}"},
+            headers={
+                "Content-Type":"video/mp4",
+                "Content-Length":str(length),
+                "Content-Range":f"bytes 0-{length-1}/{length}",
+            },
             method="PUT",
         )
         try:
             with urllib.request.urlopen(req,timeout=60) as r:
-                upload_status=r.status; r.read()
+                upload_status=r.status
+                r.read()
         except urllib.error.HTTPError as e:
-            upload_status=e.code; e.read()
+            upload_status=e.code
+            e.read()
         except Exception:
+            try:
+                store.transition_publication(idem,"UNKNOWN",error_code="upload_unreachable")
+            except DurableStateError:
+                pass
             return self.js(502,{"error":"upload_unreachable"})
-        print(f"DRAFT_STAGE upload_http={upload_status}", flush=True)
+
         if not (200<=upload_status<300):
+            try:
+                store.transition_publication(
+                    idem,
+                    "UNKNOWN" if upload_status>=500 else "FAILED",
+                    error_code=f"upload_http_{upload_status}",
+                )
+            except DurableStateError:
+                pass
             return self.js(502,{"error":"binary_upload_failed","http_status":upload_status})
-        store=state_store()
-        if store is None:
-            return self.js(503,{"error":"durable_state_required"})
+
         try:
+            store.transition_publication(idem,"UPLOADED")
+            store.transition_publication(idem,"PROCESSING")
             store.patch_session(sid,{"last_draft_publish_id":publish_id},ttl=SESSION_TTL)
         except DurableStateError:
-            return self.js(503,{"error":"durable_state_failed"})
-        return self.js(201,{"ok":True,"publish_id":publish_id,"mode":"draft_to_tiktok_inbox"})
+            return self.js(503,{
+                "error":"publication_state_persist_failed",
+                "publish_id":publish_id,
+                "idempotency_key":idem,
+            })
+        return self.js(201,{
+            "ok":True,
+            "publish_id":publish_id,
+            "mode":"draft_to_tiktok_inbox",
+            "idempotency_key":idem,
+            "local_state":"PROCESSING",
+        })
 
     def status_api(self,q):
         sid,sess=self.get_session()
@@ -835,7 +995,40 @@ async function poll(id,s){{
         publish_id=q.get("publish_id",[""])[0]
         if not publish_id:
             return self.js(400,{"error":"publish_id_required"})
+        store=state_store()
+        if store is None:
+            return self.js(503,{"error":"durable_state_required"})
+        try:
+            record=store.get_publication_by_provider_id(publish_id)
+        except DurableStateError:
+            return self.js(503,{"error":"publication_ledger_failed"})
+        if not record:
+            return self.js(404,{"error":"publication_record_not_found"})
+        if record.get("account_hash")!=fingerprint(str(sess.get("open_id",""))):
+            return self.js(403,{"error":"publication_account_mismatch"})
+
         st,payload=api_json_post(STATUS_URL,sess["access_token"],{"publish_id":publish_id})
+        err=(payload.get("error") or {}) if isinstance(payload,dict) else {}
+        data=(payload.get("data") or {}) if isinstance(payload,dict) else {}
+        provider_status=str(data.get("status") or "")
+        try:
+            if not (st==200 and err.get("code")=="ok"):
+                store.transition_publication(
+                    record["idempotency_key"],
+                    "UNKNOWN" if unknown_provider_outcome(st) else "FAILED",
+                    error_code=str(err.get("code") or st or "status_unknown"),
+                )
+            elif provider_status=="PUBLISH_COMPLETE":
+                terminal="PUBLISHED" if record.get("operation")=="DIRECT_POST" else "READY"
+                store.transition_publication(record["idempotency_key"],terminal)
+            elif "FAIL" in provider_status.upper():
+                store.transition_publication(
+                    record["idempotency_key"],"FAILED",error_code=provider_status or "provider_failed"
+                )
+            else:
+                store.transition_publication(record["idempotency_key"],"PROCESSING")
+        except DurableStateError:
+            return self.js(503,{"error":"publication_reconciliation_persist_failed"})
         return self.js(st if st else 502,payload)
 
 if __name__=="__main__":
