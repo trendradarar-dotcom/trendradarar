@@ -64,7 +64,8 @@ def _find_track_dimensions(buf, moov):
             continue
         version = buf[payload]
         # Width/height are the final 8 bytes of tkhd as 16.16 fixed-point.
-        if te - ts < th + (104 if version == 1 else 92):
+        # tkhd payload is 84 bytes for version 0 and 96 bytes for version 1.
+        if te - ts < th + (96 if version == 1 else 84):
             continue
         width_fixed = _u32(buf, te - 8)
         height_fixed = _u32(buf, te - 4)
