@@ -1,0 +1,196 @@
+name: Instagram M26.8 Operations Review Evidence
+
+on:
+  push:
+    branches:
+      - instagram-m26-8-operations-evidence-20260928
+    paths:
+      - ".github/workflows/instagram-m26-8-operations-review-evidence.yml"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  evidence:
+    runs-on: ubuntu-24.04
+    env:
+      R5_TARGET: d41c1c1cdaa7cf374989e2b059db6a640cb51eef
+      R5_TREE: 9b7d7c2ab974a55cc9073e24386f4cbe9de8437d
+      OPS_TARGET: 0a68c4003261f1fe216140fb52665f1d91585d3f
+      OPS_TREE: 8561d105562ecf0d0ce8d3fa9f467bf7411af53d
+      REVIEW_DOC_COMMIT: 5be16b582ef1c102b6f1be1a8710f2ee6a67a0b9
+      OPS_RUN: "36442457664"
+      R5_CI_RUN: "36422824796"
+    steps:
+      - name: Checkout full repository history
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact Git anchors
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p review-evidence/artifacts
+
+          test "$(git rev-parse "$R5_TARGET^{tree}")" = "$R5_TREE"
+          test "$(git rev-parse "$OPS_TARGET^{tree}")" = "$OPS_TREE"
+          test "$(git rev-parse "$REVIEW_DOC_COMMIT^")" = "$OPS_TARGET"
+
+          git cat-file -p "$R5_TARGET" > review-evidence/r5-target-commit.raw.txt
+          git cat-file -p "$OPS_TARGET" > review-evidence/operations-target-commit.raw.txt
+          git cat-file -p "$REVIEW_DOC_COMMIT" > review-evidence/review-doc-commit.raw.txt
+
+          git rev-parse "$R5_TARGET^{tree}" > review-evidence/r5-tree-root.txt
+          git rev-parse "$OPS_TARGET^{tree}" > review-evidence/operations-tree-root.txt
+          git rev-parse "$REVIEW_DOC_COMMIT^{tree}" > review-evidence/review-doc-tree-root.txt
+
+          git diff --name-status "$R5_TARGET" "$OPS_TARGET"             > review-evidence/r5-to-operations.name-status.txt
+          git diff --stat "$R5_TARGET" "$OPS_TARGET"             > review-evidence/r5-to-operations.stat.txt
+          git diff --binary "$R5_TARGET" "$OPS_TARGET"             > review-evidence/r5-to-operations.patch
+
+          git diff --name-status "$OPS_TARGET" "$REVIEW_DOC_COMMIT"             > review-evidence/operations-to-review-docs.name-status.txt
+          git diff --binary "$OPS_TARGET" "$REVIEW_DOC_COMMIT"             > review-evidence/operations-to-review-docs.patch
+
+          expected=$'review/instagram/M26_8_GOLDEN_LKG_CANDIDATE_20260928.md\nreview/instagram/M26_8_OPERATIONS_INDEPENDENT_REVIEW_REQUEST_20260928.md\nreview/instagram/M26_8_RECOVERY_HANDOVER_CANDIDATE_20260928.md'
+          test "$(git diff --name-only "$OPS_TARGET" "$REVIEW_DOC_COMMIT")" = "$expected"
+
+          git show "$OPS_TARGET:.github/workflows/instagram-operations-readiness-drill.yml"             > review-evidence/exact-operations-workflow.yml
+          git show "$OPS_TARGET:ops/instagram/recovery_drill.py"             > review-evidence/exact-recovery-drill.py
+          git show "$OPS_TARGET:ops/instagram/live_readonly_monitor.py"             > review-evidence/exact-live-readonly-monitor.py
+
+          git show "$REVIEW_DOC_COMMIT:review/instagram/M26_8_OPERATIONS_INDEPENDENT_REVIEW_REQUEST_20260928.md"             > review-evidence/INDEPENDENT_REVIEW_REQUEST.md
+          git show "$REVIEW_DOC_COMMIT:review/instagram/M26_8_GOLDEN_LKG_CANDIDATE_20260928.md"             > review-evidence/GOLDEN_LKG_CANDIDATE.md
+          git show "$REVIEW_DOC_COMMIT:review/instagram/M26_8_RECOVERY_HANDOVER_CANDIDATE_20260928.md"             > review-evidence/RECOVERY_HANDOVER_CANDIDATE.md
+
+          git branch -f evidence-r5-target "$R5_TARGET"
+          git branch -f evidence-operations-target "$OPS_TARGET"
+          git branch -f evidence-review-docs "$REVIEW_DOC_COMMIT"
+          git bundle create review-evidence/instagram-m26-8-operations.bundle             refs/heads/evidence-r5-target             refs/heads/evidence-operations-target             refs/heads/evidence-review-docs
+          git bundle verify review-evidence/instagram-m26-8-operations.bundle             > review-evidence/git-bundle-verify.txt 2>&1
+
+          {
+            echo "R5_TARGET=$R5_TARGET"
+            echo "R5_TREE=$R5_TREE"
+            echo "OPS_TARGET=$OPS_TARGET"
+            echo "OPS_TREE=$OPS_TREE"
+            echo "REVIEW_DOC_COMMIT=$REVIEW_DOC_COMMIT"
+            echo "OPS_RUN=$OPS_RUN"
+            echo "R5_CI_RUN=$R5_CI_RUN"
+            echo "EVIDENCE_WORKFLOW_COMMIT=$GITHUB_SHA"
+          } > review-evidence/EVIDENCE_IDENTITY.txt
+
+      - name: Capture governing workflow evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$OPS_RUN"             > review-evidence/operations-run.json
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$OPS_RUN/jobs?per_page=100"             > review-evidence/operations-run-jobs.json
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$OPS_RUN/artifacts?per_page=100"             > review-evidence/operations-run-artifacts.json
+          gh run view "$OPS_RUN" --repo "$GITHUB_REPOSITORY" --log             > review-evidence/operations-run.log
+
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$R5_CI_RUN"             > review-evidence/r5-ci-run.json
+
+          python - <<'PY'
+          import json, os, pathlib
+          ops = json.loads(pathlib.Path("review-evidence/operations-run.json").read_text())
+          r5 = json.loads(pathlib.Path("review-evidence/r5-ci-run.json").read_text())
+          assert ops["head_sha"] == os.environ["OPS_TARGET"]
+          assert ops["status"] == "completed"
+          assert ops["conclusion"] == "success"
+          assert r5["head_sha"] == os.environ["R5_TARGET"]
+          assert r5["status"] == "completed"
+          assert r5["conclusion"] == "success"
+          pathlib.Path("review-evidence/run-binding-proof.txt").write_text(
+              "PASS: operations run and R5 CI are bound to their exact governed SHAs.\n"
+          )
+          PY
+
+      - name: Download final operation artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh run download "$OPS_RUN" --repo "$GITHUB_REPOSITORY"             -n instagram-live-readonly-monitor-evidence             -D review-evidence/artifacts/live-monitor
+          gh run download "$OPS_RUN" --repo "$GITHUB_REPOSITORY"             -n instagram-isolated-backup-restore-dr-evidence             -D review-evidence/artifacts/isolated-recovery
+          gh run download "$OPS_RUN" --repo "$GITHUB_REPOSITORY"             -n instagram-trusted-source-rebuild-evidence             -D review-evidence/artifacts/trusted-rebuild
+
+          for d in live-monitor isolated-recovery trusted-rebuild; do
+            test -f "review-evidence/artifacts/$d/EVIDENCE_SHA256SUMS.txt"
+          done
+
+          # Artifact checksum manifests contain the original workflow directory
+          # prefix. Verify contents after recreating that prefix in a temp dir.
+          python - <<'PY'
+          import hashlib, pathlib
+          root=pathlib.Path("review-evidence/artifacts")
+          mapping={
+            "live-monitor":"monitor-evidence",
+            "isolated-recovery":"recovery-evidence",
+            "trusted-rebuild":"evidence",
+          }
+          for folder,prefix in mapping.items():
+              d=root/folder
+              manifest=(d/"EVIDENCE_SHA256SUMS.txt").read_text().splitlines()
+              for line in manifest:
+                  if not line.strip(): continue
+                  expected, rel=line.split(None,1)
+                  rel=rel.strip()
+                  marker=prefix+"/"
+                  assert rel.startswith(marker), (folder,rel)
+                  local=d/rel[len(marker):]
+                  actual=hashlib.sha256(local.read_bytes()).hexdigest()
+                  assert actual==expected, (local,expected,actual)
+          pathlib.Path("review-evidence/internal-artifact-hashes-proof.txt").write_text(
+              "PASS: all internal evidence SHA256 manifests verified.\n"
+          )
+          PY
+
+      - name: Add offline Git verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > review-evidence/VERIFY_OFFLINE.sh <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          R5="d41c1c1cdaa7cf374989e2b059db6a640cb51eef"
+          R5_TREE="9b7d7c2ab974a55cc9073e24386f4cbe9de8437d"
+          OPS="0a68c4003261f1fe216140fb52665f1d91585d3f"
+          OPS_TREE="8561d105562ecf0d0ce8d3fa9f467bf7411af53d"
+          DOCS="5be16b582ef1c102b6f1be1a8710f2ee6a67a0b9"
+
+          rm -rf verify-repo
+          git clone instagram-m26-8-operations.bundle verify-repo
+          cd verify-repo
+          git fsck --full --strict
+          test "$(git rev-parse "$R5^{tree}")" = "$R5_TREE"
+          test "$(git rev-parse "$OPS^{tree}")" = "$OPS_TREE"
+          test "$(git rev-parse "$DOCS^")" = "$OPS"
+
+          expected=$'review/instagram/M26_8_GOLDEN_LKG_CANDIDATE_20260928.md\nreview/instagram/M26_8_OPERATIONS_INDEPENDENT_REVIEW_REQUEST_20260928.md\nreview/instagram/M26_8_RECOVERY_HANDOVER_CANDIDATE_20260928.md'
+          test "$(git diff --name-only "$OPS" "$DOCS")" = "$expected"
+
+          printf 'PASS: R5, operations target, operations tree, direct documentation child, and documentation-only delta verified.\n'
+          SH
+          chmod +x review-evidence/VERIFY_OFFLINE.sh
+
+      - name: Hash complete review evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd review-evidence
+          find . -type f ! -name SHA256SUMS.txt -print0             | sort -z             | xargs -0 sha256sum > SHA256SUMS.txt
+
+      - name: Upload M26.8 verifiable evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: TrendRadar-Instagram-M26.8-Operations-Verifiable-Review-Evidence
+          path: review-evidence/
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 6
