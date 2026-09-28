@@ -30,9 +30,27 @@ jobs:
           python -m py_compile tiktok_oauth_service/test_reconciliation.py
           python -m py_compile tiktok_oauth_service/test_media_validation.py
           python -m py_compile tiktok_oauth_service/test_atomicity.py
+          python -m py_compile tools/generate_tiktok_sbom.py
       - name: Durable state and safety-gate unit tests
         working-directory: tiktok_oauth_service
         run: python -m unittest -v test_durable_state.py test_app_safety.py test_recovery.py test_reconciliation.py test_media_validation.py test_atomicity.py
+      - name: Generate exact-commit SBOM and verify immutable supply-chain refs
+        run: |
+          python tools/generate_tiktok_sbom.py --commit "$GITHUB_SHA" --output /tmp/tiktok-sbom.cdx.json
+          python - <<'PY'
+          import json, os
+          data=json.load(open("/tmp/tiktok-sbom.cdx.json",encoding="utf-8"))
+          assert data["metadata"]["component"]["version"] == os.environ["GITHUB_SHA"].lower()
+          assert data["components"]
+          assert any(c.get("name")=="av" for c in data["components"])
+          assert all(
+              c.get("hashes") or c.get("purl","").startswith("pkg:github/")
+              for c in data["components"]
+          )
+          PY
+      - name: No mutable GitHub Action tags remain
+        run: |
+          ! grep -R -nE 'uses:[[:space:]]+[^[:space:]#]+@v[0-9]+' .github/workflows
       - name: No legacy process-memory OAuth stores
         run: |
           ! grep -q '_STATES' tiktok_oauth_service/app.py
