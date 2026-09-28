@@ -12,7 +12,10 @@ def probe_video(path: str) -> Dict[str, Any]:
     """Read container/video metadata without trusting client-supplied values."""
     reader = None
     try:
-        reader = imageio_ffmpeg.read_frames(path, pix_fmt="rgb24", input_params=["-v", "error"])
+        # imageio-ffmpeg parses stream metadata from ffmpeg's diagnostic output.
+        # Do not force "-v error" here because that suppresses the very metadata
+        # the library needs to determine duration and frame size.
+        reader = imageio_ffmpeg.read_frames(path, pix_fmt="rgb24")
         meta = next(reader)
         size = meta.get("size") or (0, 0)
         width = int(size[0] or 0)
