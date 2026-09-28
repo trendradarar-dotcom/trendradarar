@@ -1,4 +1,5 @@
 from contextlib import suppress
+import subprocess
 from typing import Any, Dict
 
 import imageio_ffmpeg
@@ -8,13 +9,54 @@ class MediaProbeError(RuntimeError):
     pass
 
 
+FULL_STREAM_TIMEOUT_SECONDS = 180
+
+
+def _verify_full_video_stream(path: str) -> None:
+    """Decode the complete primary video stream and fail on any decode error."""
+    ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+    command = [
+        ffmpeg,
+        "-nostdin",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-err_detect",
+        "explode",
+        "-xerror",
+        "-i",
+        path,
+        "-map",
+        "0:v:0",
+        "-an",
+        "-sn",
+        "-dn",
+        "-f",
+        "null",
+        "-",
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            timeout=FULL_STREAM_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise MediaProbeError("video_full_stream_probe_failed") from exc
+
+    if result.returncode != 0:
+        raise MediaProbeError("video_full_stream_corrupt")
+
+
 def probe_video(path: str) -> Dict[str, Any]:
-    """Read container/video metadata without trusting client-supplied values."""
+    """Measure metadata and decode the complete video stream before accepting it."""
     reader = None
     try:
         # imageio-ffmpeg parses stream metadata from ffmpeg's diagnostic output.
-        # Do not force "-v error" here because that suppresses the very metadata
-        # the library needs to determine duration and frame size.
+        # Do not force "-v error" here because that suppresses the metadata
+        # needed to determine duration and frame size.
         reader = imageio_ffmpeg.read_frames(path, pix_fmt="rgb24")
         meta = next(reader)
         size = meta.get("size") or (0, 0)
@@ -24,6 +66,12 @@ def probe_video(path: str) -> Dict[str, Any]:
         codec = str(meta.get("codec") or "")
         if width <= 0 or height <= 0 or duration <= 0:
             raise MediaProbeError("video_metadata_incomplete")
+
+        # Metadata at the beginning of a container is not sufficient. A file can
+        # begin normally and become corrupt later. Force ffmpeg to decode the
+        # primary video stream through EOF before returning a successful probe.
+        _verify_full_video_stream(path)
+
         return {
             "width": width,
             "height": height,
