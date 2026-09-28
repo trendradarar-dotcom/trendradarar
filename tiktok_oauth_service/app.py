@@ -119,7 +119,20 @@ def publication_identity(sess, operation, video, metadata):
     return idempotency_key,content_hash,account_hash,metadata_hash
 
 def unknown_provider_outcome(http_status):
-    return (not http_status) or int(http_status)>=500
+    if not http_status:
+        return True
+    status=int(http_status)
+    return status==429 or status==408 or status>=500
+
+def provider_terminal_state(operation, provider_status):
+    status=str(provider_status or "").upper()
+    if "FAIL" in status:
+        return "FAILED"
+    if operation=="DIRECT_POST" and status=="PUBLISH_COMPLETE":
+        return "PUBLISHED"
+    if operation=="DRAFT_UPLOAD" and status in ("PUBLISH_COMPLETE","SEND_TO_USER_INBOX"):
+        return "READY"
+    return None
 
 def scope_set(sess):
     raw=str((sess or {}).get("scope",""))
@@ -733,8 +746,8 @@ async function poll(id,s){{
   await new Promise(r=>setTimeout(r,2500));
   const r=await fetch('/api/status?publish_id='+encodeURIComponent(id));
   const j=await r.json(); s.textContent='TikTok status:\\n'+JSON.stringify(j,null,2);
-  const st=((j.data||{{}}).status||'').toUpperCase();
-  if(st==='FAILED'||st==='PUBLISH_COMPLETE'||st==='SEND_TO_USER_INBOX') return;
+  const local=((j.local_state)||'').toUpperCase();
+  if(local==='FAILED'||local==='PUBLISHED'||local==='READY') return;
  }}
 }}
 </script>"""
@@ -1288,23 +1301,29 @@ async function poll(id,s){{
         provider_status=str(data.get("status") or "")
         try:
             if not (st==200 and err.get("code")=="ok"):
+                # A status-read failure cannot prove publication failure. Preserve ambiguity
+                # and reconcile later; only explicit provider publication failure is terminal.
                 store.transition_publication(
                     record["idempotency_key"],
-                    "UNKNOWN" if unknown_provider_outcome(st) else "FAILED",
+                    "UNKNOWN",
                     error_code=str(err.get("code") or st or "status_unknown"),
                 )
-            elif provider_status=="PUBLISH_COMPLETE":
-                terminal="PUBLISHED" if record.get("operation")=="DIRECT_POST" else "READY"
-                store.transition_publication(record["idempotency_key"],terminal)
-            elif "FAIL" in provider_status.upper():
-                store.transition_publication(
-                    record["idempotency_key"],"FAILED",error_code=provider_status or "provider_failed"
-                )
             else:
-                store.transition_publication(record["idempotency_key"],"PROCESSING")
+                terminal=provider_terminal_state(record.get("operation"),provider_status)
+                if terminal=="FAILED":
+                    store.transition_publication(
+                        record["idempotency_key"],"FAILED",error_code=provider_status or "provider_failed"
+                    )
+                elif terminal:
+                    store.transition_publication(record["idempotency_key"],terminal)
+                else:
+                    store.transition_publication(record["idempotency_key"],"PROCESSING")
+            updated=store.get_publication(record["idempotency_key"])
         except DurableStateError:
             return self.js(503,{"error":"publication_reconciliation_persist_failed"})
-        return self.js(st if st else 502,payload)
+        response=dict(payload) if isinstance(payload,dict) else {"provider_payload":payload}
+        response["local_state"]=(updated or {}).get("state")
+        return self.js(st if st else 502,response)
 
 if __name__=="__main__":
     ThreadingHTTPServer(("0.0.0.0",int(os.environ.get("PORT","10000"))),Handler).serve_forever()
