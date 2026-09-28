@@ -44,9 +44,16 @@ Fresh / Independent / Adversarial / Read-Only First / Exact-Target-Bound / Exact
 
 قبل مراجعة أي Finding:
 
-1. تحقق أن فرع المراجعة المجمد يشير إلى commit المحدد أعلاه.
-2. تحقق أن commit المحدد يشير إلى tree المحدد أعلاه.
-3. إذا فشل أي منهما: الحكم = EXACT TARGET NOT VERIFIED ولا يبدأ منح PASS للبنود الأخرى.
+1. اقرأ `EXACT_TARGET_REOPEN_INSTRUCTIONS.md`.
+2. تحقق من Git bundle داخل الحزمة داخل مستودع Git مؤقت مستقل.
+3. Clone للـbundle ثم أعد حساب `HEAD` و`HEAD^{tree}`.
+4. أعد بناء root tree مرة ثانية من `full-repository-snapshot.tar`.
+5. المطلوب أن تكون القيم:
+   - commit = `acb5aff7a79de29f82c150428d29136148b51b36`
+   - tree = `56694a061bbd5ca09f1d8db8e014e04200258403`
+6. إذا فشل أي منهما: الحكم = EXACT TARGET NOT VERIFIED ولا يبدأ منح PASS للبنود الأخرى.
+
+الحزمة البديلة تحتوي full repository snapshot وGit bundle؛ لا تعتمد على مجرد كتابة الـSHA في ملف نصي.
 
 ## ما يجب مراجعته
 
