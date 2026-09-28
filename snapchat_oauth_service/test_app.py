@@ -121,7 +121,7 @@ class DirectBridgeRemediationTests(unittest.TestCase):
                 self.assertEqual(callback.status_code, 200)
                 body = callback.get_json()
                 self.assertEqual(body["exact_profile_binding"], "PASS")
-                self.assertTrue(body["refresh_token_persisted"])
+                self.assertTrue(body["refresh_credential_persisted"])
 
                 replay = self.client.get("/auth/callback", query_string={"code": "one-time-code", "state": state})
                 self.assertEqual(replay.status_code, 400)
