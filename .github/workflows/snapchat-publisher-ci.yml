@@ -81,6 +81,31 @@ jobs:
           SNAPCHAT_TEST_POSTGRES_URL: postgresql://snapchat:snapchat_ci_only@127.0.0.1:5432/snapchat_test
         run: python -m unittest -v test_postgres_integration.py
 
+      - name: Record PostgreSQL test image digest
+        shell: bash
+        run: |
+          set -euo pipefail
+          image_id="$(docker images --no-trunc --quiet postgres:16.15-bookworm | head -n1)"
+          test -n "$image_id"
+          echo "PostgreSQL test image ID: $image_id"
+
+      - name: Test PostgreSQL backup restore and duplicate prevention
+        working-directory: snapchat_oauth_service
+        shell: bash
+        env:
+          SOURCE_DB: postgresql://snapchat:snapchat_ci_only@127.0.0.1:5432/snapchat_test
+          RESTORE_DB: postgresql://snapchat:snapchat_ci_only@127.0.0.1:5432/snapchat_restore
+        run: |
+          set -euo pipefail
+          python backup_restore_probe.py seed "$SOURCE_DB"
+          container_id="$(docker ps --filter ancestor=postgres:16.15-bookworm --format '{{.ID}}' | head -n1)"
+          test -n "$container_id"
+          docker exec "$container_id" pg_dump -U snapchat -d snapchat_test -Fc -f /tmp/snapchat.dump
+          docker exec "$container_id" psql -U snapchat -d postgres -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS snapchat_restore;"
+          docker exec "$container_id" psql -U snapchat -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE snapchat_restore;"
+          docker exec "$container_id" pg_restore -U snapchat -d snapchat_restore --exit-on-error /tmp/snapchat.dump
+          python backup_restore_probe.py verify "$RESTORE_DB"
+
       - name: Verify no credential material in current Snapchat tree
         run: python .github/scripts/snapchat_secret_scan.py current-tree
 
