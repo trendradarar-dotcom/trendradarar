@@ -264,15 +264,16 @@ class DurableState:
                 (state_hash, sid_hash, sid_cipher, str(next_path), now, now + ttl),
             )
 
-    def consume_oauth_state(self, state, now=None):
-        if not state:
+    def consume_oauth_state(self, state, expected_sid, now=None):
+        if not state or not expected_sid:
             return None
         now = int(time.time() if now is None else now)
         state_hash = _sha256(state)
+        expected_sid_hash = _sha256(expected_sid)
         with self._lock, closing(self._connect()) as con:
             con.execute("BEGIN IMMEDIATE")
             row = con.execute(
-                """SELECT sid_cipher,next_path,created_at,expires_at,consumed_at
+                """SELECT sid_hash,sid_cipher,next_path,created_at,expires_at,consumed_at
                    FROM oauth_states WHERE state_hash=?""",
                 (state_hash,),
             ).fetchone()
@@ -281,12 +282,18 @@ class DurableState:
                     con.execute("DELETE FROM oauth_states WHERE state_hash=?", (state_hash,))
                 con.execute("COMMIT")
                 return None
+            if str(row["sid_hash"]) != expected_sid_hash:
+                # Do not consume the legitimate user's state on a browser/session mismatch.
+                con.execute("ROLLBACK")
+                return None
             con.execute("UPDATE oauth_states SET consumed_at=? WHERE state_hash=?", (now, state_hash))
             con.execute("COMMIT")
         try:
             sid = self._fernet.decrypt(bytes(row["sid_cipher"])).decode("utf-8")
         except (InvalidToken, UnicodeDecodeError) as exc:
             raise DurableStateError("oauth state session binding failed authentication") from exc
+        if sid != expected_sid:
+            raise DurableStateError("oauth state browser binding failed authentication")
         return {"sid": sid, "ts": int(row["created_at"]), "next_path": str(row["next_path"])}
 
     def create_handoff(self, token, sid, next_path, now=None, ttl=600):
