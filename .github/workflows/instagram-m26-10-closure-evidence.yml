@@ -6,6 +6,7 @@ on:
       - instagram-operations-closure-m26-10-20260929
     paths:
       - "ops/instagram/secret_history_scan.py"
+      - "ops/instagram/live_readonly_monitor.py"
       - "review/instagram/M26_10_*"
       - ".github/workflows/instagram-m26-10-closure-evidence.yml"
   workflow_dispatch:
@@ -93,15 +94,31 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-      - name: Create, verify, recover, and close synthetic alert
+
+      - name: Detect a controlled synthetic monitor failure
+        run: |
+          set -euo pipefail
+          mkdir -p evidence-alert
+          set +e
+          python ops/instagram/live_readonly_monitor.py \
+            --expected-backend-revision "M26.10-INTENTIONAL-MISMATCH" \
+            --evidence evidence-alert/unexpected-success.json \
+            > evidence-alert/detection.stdout.txt \
+            2> evidence-alert/detection.stderr.txt
+          rc=$?
+          set -e
+          echo "$rc" > evidence-alert/detection-exit-code.txt
+          test "$rc" -ne 0
+          printf 'CONTROLLED_MONITOR_FAILURE_DETECTED=PASS\n' > evidence-alert/detection-result.txt
+
+      - name: Deliver synthetic alert to GitHub Issues
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          mkdir -p evidence-alert
-          correlation="M26.10-ALERT-${GITHUB_SHA:0:12}"
-          title="[DRILL][Instagram] Synthetic monitoring alert $correlation"
-          body="Synthetic alert-delivery drill only. No production incident. Correlation: $correlation. Public publishing remains disabled."
+          correlation="M26.10-E2E-ALERT-${GITHUB_SHA:0:12}"
+          title="[DRILL][Instagram] Monitor failure $correlation"
+          body="Synthetic end-to-end alert drill. The read-only monitor intentionally failed on a false expected revision. No production incident. Correlation: $correlation. Public publishing remains disabled."
           issue_url="$(gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body")"
           issue_number="${issue_url##*/}"
           gh api "repos/$GITHUB_REPOSITORY/issues/$issue_number" > evidence-alert/created-issue.json
@@ -113,25 +130,51 @@ jobs:
           assert corr in data["title"]
           assert corr in (data.get("body") or "")
           PY
-          gh issue comment "$issue_number" --repo "$GITHUB_REPOSITORY"             --body "RECOVERY DRILL: synthetic condition cleared. Correlation: $correlation. No publication gate was changed."
-          gh issue close "$issue_number" --repo "$GITHUB_REPOSITORY" --reason completed
-          gh api "repos/$GITHUB_REPOSITORY/issues/$issue_number" > evidence-alert/closed-issue.json
-          python - "$correlation" evidence-alert/closed-issue.json <<'PY'
-          import json,sys
-          corr=sys.argv[1]
-          data=json.load(open(sys.argv[2]))
-          assert data["state"]=="closed"
-          assert corr in data["title"]
-          PY
           {
             echo "CORRELATION=$correlation"
             echo "ISSUE_NUMBER=$issue_number"
             echo "ISSUE_URL=$issue_url"
+          } > evidence-alert/alert-identity.txt
+
+      - name: Verify recovery with the actual governed R5 revision
+        run: |
+          set -euo pipefail
+          python ops/instagram/live_readonly_monitor.py \
+            --expected-backend-revision "M26.7-R5-FULL-DECODE-PREFLIGHT-20260928" \
+            --evidence evidence-alert/recovery-monitor.json
+
+      - name: Deliver recovery notification and close alert
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          issue_number="$(sed -n 's/^ISSUE_NUMBER=//p' evidence-alert/alert-identity.txt)"
+          correlation="$(sed -n 's/^CORRELATION=//p' evidence-alert/alert-identity.txt)"
+          gh issue comment "$issue_number" --repo "$GITHUB_REPOSITORY" \
+            --body "RECOVERY DRILL: live read-only monitor passed with governed R5 revision and all fail-closed assertions. Correlation: $correlation. No publication gate was changed."
+          gh issue close "$issue_number" --repo "$GITHUB_REPOSITORY" --reason completed
+          gh api "repos/$GITHUB_REPOSITORY/issues/$issue_number" > evidence-alert/closed-issue.json
+          gh api "repos/$GITHUB_REPOSITORY/issues/$issue_number/comments" > evidence-alert/comments.json
+          python - "$correlation" evidence-alert/closed-issue.json evidence-alert/comments.json <<'PY'
+          import json,sys
+          corr=sys.argv[1]
+          issue=json.load(open(sys.argv[2]))
+          comments=json.load(open(sys.argv[3]))
+          assert issue["state"]=="closed"
+          assert corr in issue["title"]
+          assert any("RECOVERY DRILL" in (item.get("body") or "") and corr in (item.get("body") or "") for item in comments)
+          PY
+          {
+            echo "MONITOR_FAILURE_DETECTED=PASS"
             echo "ALERT_CHANNEL_DELIVERY=PASS"
+            echo "ALERT_CHANNEL_RECEIPT_CONFIRMED=PASS"
+            echo "RECOVERY_MONITOR=PASS"
             echo "RECOVERY_NOTIFICATION_CHANNEL=PASS"
+            echo "END_TO_END_MONITOR_TO_ALERT_DRILL=PASS"
             echo "HUMAN_ACKNOWLEDGEMENT=NOT_VERIFIED"
           } > evidence-alert/result.txt
           find evidence-alert -type f ! -name SHA256SUMS.txt -print0 | sort -z | xargs -0 sha256sum > evidence-alert/SHA256SUMS.txt
+
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: instagram-m26-10-alert-channel-drill-evidence
