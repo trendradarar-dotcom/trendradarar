@@ -1,0 +1,139 @@
+name: Instagram M26.10 Operations Closure Evidence
+
+on:
+  push:
+    branches:
+      - instagram-operations-closure-m26-10-20260929
+    paths:
+      - "ops/instagram/secret_history_scan.py"
+      - "review/instagram/M26_10_*"
+      - ".github/workflows/instagram-m26-10-closure-evidence.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+  issues: write
+
+env:
+  R5_EXACT_TARGET: d41c1c1cdaa7cf374989e2b059db6a640cb51eef
+  R5_EXACT_TREE: 9b7d7c2ab974a55cc9073e24386f4cbe9de8437d
+  LIVE_SYNC_COMMIT: d2477d9397643c789fa4b27dbcf669a83b1acd2a
+  LIVE_SYNC_TREE: 9b7d7c2ab974a55cc9073e24386f4cbe9de8437d
+  R5_CI_RUN: "36422824796"
+  M268_OPERATIONS_RUN: "36442457664"
+  M268_EVIDENCE_RUN: "36443310589"
+
+jobs:
+  golden-lkg-promotion-evidence:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify promoted exact snapshot and live tree identity
+        run: |
+          set -euo pipefail
+          mkdir -p evidence-golden
+          test "$(git rev-parse "$R5_EXACT_TARGET^{tree}")" = "$R5_EXACT_TREE"
+          test "$(git rev-parse "$LIVE_SYNC_COMMIT^{tree}")" = "$LIVE_SYNC_TREE"
+          test "$R5_EXACT_TREE" = "$LIVE_SYNC_TREE"
+          cp review/instagram/M26_10_GOLDEN_LKG_PROMOTION_20260929.md evidence-golden/
+          {
+            echo "R5_EXACT_TARGET=$R5_EXACT_TARGET"
+            echo "R5_EXACT_TREE=$R5_EXACT_TREE"
+            echo "LIVE_SYNC_COMMIT=$LIVE_SYNC_COMMIT"
+            echo "LIVE_SYNC_TREE=$LIVE_SYNC_TREE"
+            echo "GOLDEN_LKG_PROMOTION_RECORD=PASS"
+            echo "PUBLIC_ACTIVATION_AUTHORIZED=FALSE"
+          } > evidence-golden/result.txt
+          find evidence-golden -type f ! -name SHA256SUMS.txt -print0 | sort -z | xargs -0 sha256sum > evidence-golden/SHA256SUMS.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: instagram-m26-10-golden-lkg-promotion-evidence
+          path: evidence-golden/
+          retention-days: 30
+
+  token-secret-history-evidence:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Scan full Instagram-scoped Git history
+        run: |
+          set -euo pipefail
+          mkdir -p evidence-secret/external
+          python ops/instagram/secret_history_scan.py --history --output evidence-secret/git-history-scan.json
+      - name: Capture and scan governing CI logs and artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for run in "$R5_CI_RUN" "$M268_OPERATIONS_RUN" "$M268_EVIDENCE_RUN"; do
+            gh run view "$run" --repo "$GITHUB_REPOSITORY" --log > "evidence-secret/external/run-$run.log"
+            mkdir -p "evidence-secret/external/artifacts-$run"
+            gh run download "$run" --repo "$GITHUB_REPOSITORY" -D "evidence-secret/external/artifacts-$run" || true
+          done
+          python ops/instagram/secret_history_scan.py --root evidence-secret/external --output evidence-secret/external-scan.json
+          printf '%s\n'             'INSTAGRAM_GIT_HISTORY_SECRET_SCAN=PASS'             'GOVERNING_CI_LOG_ARTIFACT_SECRET_SCAN=PASS'             'ROTATION_HISTORY_VERIFIED=NO'             > evidence-secret/result.txt
+          find evidence-secret -type f ! -name SHA256SUMS.txt -print0 | sort -z | xargs -0 sha256sum > evidence-secret/SHA256SUMS.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: instagram-m26-10-token-secret-scan-evidence
+          path: evidence-secret/
+          retention-days: 30
+          compression-level: 6
+
+  alert-channel-delivery-drill:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Create, verify, recover, and close synthetic alert
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p evidence-alert
+          correlation="M26.10-ALERT-${GITHUB_SHA:0:12}"
+          title="[DRILL][Instagram] Synthetic monitoring alert $correlation"
+          body="Synthetic alert-delivery drill only. No production incident. Correlation: $correlation. Public publishing remains disabled."
+          issue_url="$(gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body")"
+          issue_number="${issue_url##*/}"
+          gh api "repos/$GITHUB_REPOSITORY/issues/$issue_number" > evidence-alert/created-issue.json
+          python - "$correlation" evidence-alert/created-issue.json <<'PY'
+          import json,sys
+          corr=sys.argv[1]
+          data=json.load(open(sys.argv[2]))
+          assert data["state"]=="open"
+          assert corr in data["title"]
+          assert corr in (data.get("body") or "")
+          PY
+          gh issue comment "$issue_number" --repo "$GITHUB_REPOSITORY"             --body "RECOVERY DRILL: synthetic condition cleared. Correlation: $correlation. No publication gate was changed."
+          gh issue close "$issue_number" --repo "$GITHUB_REPOSITORY" --reason completed
+          gh api "repos/$GITHUB_REPOSITORY/issues/$issue_number" > evidence-alert/closed-issue.json
+          python - "$correlation" evidence-alert/closed-issue.json <<'PY'
+          import json,sys
+          corr=sys.argv[1]
+          data=json.load(open(sys.argv[2]))
+          assert data["state"]=="closed"
+          assert corr in data["title"]
+          PY
+          {
+            echo "CORRELATION=$correlation"
+            echo "ISSUE_NUMBER=$issue_number"
+            echo "ISSUE_URL=$issue_url"
+            echo "ALERT_CHANNEL_DELIVERY=PASS"
+            echo "RECOVERY_NOTIFICATION_CHANNEL=PASS"
+            echo "HUMAN_ACKNOWLEDGEMENT=NOT_VERIFIED"
+          } > evidence-alert/result.txt
+          find evidence-alert -type f ! -name SHA256SUMS.txt -print0 | sort -z | xargs -0 sha256sum > evidence-alert/SHA256SUMS.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: instagram-m26-10-alert-channel-drill-evidence
+          path: evidence-alert/
+          retention-days: 30
