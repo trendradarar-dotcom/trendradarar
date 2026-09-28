@@ -10,6 +10,7 @@ on:
       - "snapchat_oauth_service/**"
       - ".github/workflows/snapchat-publisher-ci.yml"
       - ".github/scripts/snapchat_secret_scan.py"
+      - "SNAPCHAT_*.md"
   workflow_dispatch:
 
 permissions:
