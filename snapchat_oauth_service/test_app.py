@@ -201,6 +201,8 @@ class DirectBridgeRemediationTests(unittest.TestCase):
         publication_id = "snap-sa-trend-001-20260928T010000Z"
         form = {
             "publication_id": publication_id,
+            "content_id": "content-publish-0001",
+            "job_id": "job-publish-0001",
             "description": "اختبار آمن",
             "locale": "ar_SA",
         }
@@ -239,6 +241,8 @@ class DirectBridgeRemediationTests(unittest.TestCase):
         publication_id = "snap-sa-trend-002-20260928T010000Z"
         form = {
             "publication_id": publication_id,
+            "content_id": "content-publish-0002",
+            "job_id": "job-publish-0002",
             "description": "اختبار حالة غير معروفة",
             "locale": "ar_SA",
         }
@@ -278,6 +282,8 @@ class DirectBridgeRemediationTests(unittest.TestCase):
                 "/spotlight/validate",
                 data={
                     "publication_id": "snap-sa-trend-003-20260928T010000Z",
+                    "content_id": "content-validate-0003",
+                    "job_id": "job-validate-0003",
                     "description": "اختبار",
                     "locale": "ar_SA",
                     "video": (io.BytesIO(b"video"), "video.mp4", "video/mp4"),
@@ -305,7 +311,9 @@ class StateStoreRecoveryTests(unittest.TestCase):
         admission = store.begin_publication(
             profile_id=profile_id,
             publication_id=publication_id,
-            correlation_id="corr-12345678",
+undefinedcontent_id="content-state-store-0001",
+undefinedjob_id="job-state-store-0001",
+            "corr-12345678",
             description="desc",
             media_sha256="a" * 64,
             duration=35.0,
@@ -333,7 +341,9 @@ class StateStoreRecoveryTests(unittest.TestCase):
         duplicate = fresh.begin_publication(
             profile_id=profile_id,
             publication_id=publication_id,
-            correlation_id="corr-87654321",
+undefinedcontent_id="content-state-store-0001",
+undefinedjob_id="job-state-store-0001",
+            "corr-87654321",
             description="desc",
             media_sha256="a" * 64,
             duration=35.0,
@@ -349,12 +359,59 @@ class StateStoreRecoveryTests(unittest.TestCase):
         self.assertFalse(duplicate["retry_admitted"])
         self.assertEqual(duplicate["row"]["state"], "SUBMITTING")
 
+    def test_failed_pre_submit_retry_requires_identical_bound_payload(self):
+        _, store = self._store()
+        profile_id = "profile-payload-binding"
+        publication_id = "publication-payload-binding-0001"
+        common = {
+            "profile_id": profile_id,
+            "publication_id": publication_id,
+            "content_id": "content-payload-binding-0001",
+            "job_id": "job-payload-binding-0001",
+            "correlation_id": "corr-payload-binding-0001",
+            "description": "same-description",
+            "media_sha256": "a" * 64,
+            "duration": 35.0,
+            "width": 1080,
+            "height": 1920,
+            "max_hour": 10,
+            "max_day": 20,
+            "max_concurrent": 1,
+            "max_attempts": 2,
+            "retry_horizon_seconds": 1800,
+        }
+        created = store.begin_publication(**common)
+        self.assertTrue(created["created"])
+        store.transition(
+            profile_id=profile_id,
+            publication_id=publication_id,
+            allowed_from=("RECEIVED",),
+            new_state="FAILED_PRE_SUBMIT",
+            last_error="simulated_pre_submit_failure",
+        )
+
+        changed = dict(common)
+        changed["correlation_id"] = "corr-payload-binding-0002"
+        changed["media_sha256"] = "b" * 64
+        with self.assertRaises(StateStoreError) as ctx:
+            store.begin_publication(**changed)
+        self.assertEqual(str(ctx.exception), "publication_payload_mismatch")
+
+        retry = dict(common)
+        retry["correlation_id"] = "corr-payload-binding-0003"
+        admitted = store.begin_publication(**retry)
+        self.assertFalse(admitted["created"])
+        self.assertTrue(admitted["retry_admitted"])
+        self.assertEqual(admitted["row"]["attempt_count"], 2)
+
     def test_concurrent_blast_radius_gate_blocks_second_active_publication(self):
         _, store = self._store()
         store.begin_publication(
             profile_id="profile-1",
             publication_id="publication-11111111",
-            correlation_id="corr-11111111",
+undefinedcontent_id="content-state-store-0001",
+undefinedjob_id="job-state-store-0001",
+            "corr-11111111",
             description="one",
             media_sha256="1" * 64,
             duration=35.0,
@@ -370,7 +427,9 @@ class StateStoreRecoveryTests(unittest.TestCase):
             store.begin_publication(
                 profile_id="profile-1",
                 publication_id="publication-22222222",
-                correlation_id="corr-22222222",
+undefinedcontent_id="content-state-store-0001",
+undefinedjob_id="job-state-store-0001",
+                "corr-22222222",
                 description="two",
                 media_sha256="2" * 64,
                 duration=35.0,
