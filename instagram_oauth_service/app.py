@@ -20,7 +20,7 @@ from flask import Flask, Response, jsonify, redirect, request, send_file, sessio
 from publisher_runtime import IntentValidationError, PublisherRuntime
 
 APP_NAME = "Trend Radar — Instagram Reels"
-BUILD_REVISION = "M26.5-RECOVERY-HARDENING-20260928"
+BUILD_REVISION = "M26.6-R4-PRODUCTION-ADMISSION-20260928"
 API_VERSION = os.getenv("INSTAGRAM_API_VERSION", "v26.0").strip() or "v26.0"
 APP_ID = os.getenv("INSTAGRAM_APP_ID", "").strip()
 APP_SECRET = os.getenv("INSTAGRAM_APP_SECRET", "").strip()
@@ -1034,7 +1034,7 @@ small{{color:#555}}
 <p>Creator-authorized Instagram integration for original Trend Radar short-form content.</p>
 <p><strong>Configuration:</strong> {configured}</p>
 <p><strong>Publishing safety:</strong> public publishing is {"enabled" if PUBLIC_PUBLISH_AUTHORIZED else "disabled"}.</p>
-<p><a class="button" href="/auth/instagram/start">Connect Instagram Professional Account</a></p>
+<p><strong>OAuth re-link:</strong> hard-disabled fail-closed in this production-admission candidate.</p>
 </div>
 <p><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/data-deletion">Data deletion</a></p>
 <small>Instagram Professional (Business or Creator) accounts only.</small>
