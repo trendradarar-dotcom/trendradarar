@@ -1,0 +1,241 @@
+name: Instagram Operations Readiness Drill
+
+on:
+  push:
+    branches:
+      - instagram-operations-readiness-m26-8-20260928
+    paths:
+      - "ops/instagram/**"
+      - ".github/workflows/instagram-operations-readiness-drill.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  R5_EXACT_TARGET: d41c1c1cdaa7cf374989e2b059db6a640cb51eef
+  R5_CI_RUN: "36422824796"
+  R5_WHEELHOUSE: instagram-runtime-wheelhouse-d41c1c1cdaa7cf374989e2b059db6a640cb51eef
+  EXPECTED_LIVE_R4_REVISION: M26.6-R4-PRODUCTION-ADMISSION-20260928
+
+jobs:
+  trusted-source-rebuild:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: trendradar_instagram_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d trendradar_instagram_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      INSTAGRAM_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/trendradar_instagram_test
+    steps:
+      - name: Checkout exact R5 trusted source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ env.R5_EXACT_TARGET }}
+          persist-credentials: false
+
+      - name: Setup exact Python family
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.14"
+
+      - name: Download exact R5 wheelhouse
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh run download "$R5_CI_RUN" --repo "$GITHUB_REPOSITORY"             -n "$R5_WHEELHOUSE" -D wheelhouse
+          (cd wheelhouse && sha256sum -c SHA256SUMS.txt)
+
+      - name: Rebuild runtime without Python package network access
+        run: |
+          set -euo pipefail
+          python -m pip install --no-index --find-links=wheelhouse             -r instagram_oauth_service/requirements.txt
+          python -m pip install --no-index --find-links=wheelhouse             -r instagram_oauth_gateway/requirements.txt
+          python -m pip check
+
+      - name: Compile and run exact R5 acceptance suites
+        run: |
+          set -euo pipefail
+          python -m py_compile             instagram_oauth_service/app.py             instagram_oauth_service/publisher_runtime.py             instagram_oauth_service/trendhunter_instagram_publisher.py             instagram_oauth_service/refresh_cron.py             instagram_oauth_gateway/app.py
+          python -m unittest -v tests.test_instagram_publisher
+          python -m unittest -v tests.test_instagram_gateway
+          python -m unittest -v tests.test_instagram_media_full_decode
+          python -m unittest -v tests.test_instagram_postgres_integration
+          python -m unittest -v tests.test_instagram_postgres_runtime
+
+      - name: Record trusted-source evidence
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          git rev-parse HEAD > evidence/exact-source-commit.txt
+          git rev-parse HEAD^{tree} > evidence/exact-source-tree.txt
+          git archive HEAD | sha256sum > evidence/source-archive.sha256.txt
+          python --version > evidence/python-version.txt 2>&1
+          python -m pip freeze --all > evidence/resolved-python-packages.txt
+          docker image inspect postgres:18             --format='{{index .RepoDigests 0}}'             > evidence/postgres-image-digest.txt
+          cp wheelhouse/SHA256SUMS.txt evidence/wheelhouse-SHA256SUMS.txt
+          printf '%s\n'             'TRUSTED_SOURCE_REBUILD=PASS'             'PYTHON_DEPENDENCIES_INSTALLED_FROM_CAPTURED_WHEELHOUSE_ONLY=PASS'             'EXACT_R5_ACCEPTANCE_SUITES=PASS'             > evidence/result.txt
+          find evidence -type f -printf '%P\n' | sort | xargs -I{} sha256sum "evidence/{}"             > evidence/EVIDENCE_SHA256SUMS.txt
+
+      - name: Upload trusted-source evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: instagram-trusted-source-rebuild-evidence
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 6
+
+  isolated-backup-restore-dr:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: trendradar_instagram_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d trendradar_instagram_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      PRIMARY_DSN: postgresql://postgres:postgres@127.0.0.1:5432/trendradar_instagram_test
+      RESTORE_DSN: postgresql://postgres:postgres@127.0.0.1:5432/trendradar_instagram_restore
+    steps:
+      - name: Checkout operations drill plus exact application source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.14"
+
+      - name: Download and verify exact R5 wheelhouse
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh run download "$R5_CI_RUN" --repo "$GITHUB_REPOSITORY"             -n "$R5_WHEELHOUSE" -D wheelhouse
+          (cd wheelhouse && sha256sum -c SHA256SUMS.txt)
+          python -m pip install --no-index --find-links=wheelhouse             -r instagram_oauth_service/requirements.txt
+          python -m pip check
+
+      - name: Seed exact application schema and governed recovery states
+        run: |
+          set -euo pipefail
+          mkdir -p recovery-evidence
+          python ops/instagram/recovery_drill.py seed             --dsn "$PRIMARY_DSN"             --evidence recovery-evidence/source-snapshot.json
+
+      - name: Create cryptographic PostgreSQL backup
+        run: |
+          set -euo pipefail
+          docker image inspect postgres:18             --format='{{index .RepoDigests 0}}'             > recovery-evidence/postgres-image-digest.txt
+
+          docker run --rm --network host             -e PGPASSWORD=postgres postgres:18             pg_dump -h 127.0.0.1 -U postgres             --format=custom --no-owner --no-privileges             trendradar_instagram_test             > recovery-evidence/instagram-recovery.dump
+
+          sha256sum recovery-evidence/instagram-recovery.dump             > recovery-evidence/instagram-recovery.dump.sha256
+          stat -c '%s' recovery-evidence/instagram-recovery.dump             > recovery-evidence/instagram-recovery.dump.bytes
+
+          docker run --rm --network host             -e PGPASSWORD=postgres postgres:18             pg_dump -h 127.0.0.1 -U postgres             --schema-only --no-owner --no-privileges             trendradar_instagram_test             | grep -vE '^\\\\(un)?restrict '             > recovery-evidence/source-schema.sql
+
+      - name: Restore into a clean disaster-recovery database
+        run: |
+          set -euo pipefail
+          start_epoch="$(date +%s)"
+
+          docker run --rm --network host             -e PGPASSWORD=postgres postgres:18             createdb -h 127.0.0.1 -U postgres trendradar_instagram_restore
+
+          docker run --rm --network host             -i -e PGPASSWORD=postgres postgres:18             pg_restore -h 127.0.0.1 -U postgres             --no-owner --no-privileges             -d trendradar_instagram_restore             < recovery-evidence/instagram-recovery.dump
+
+          end_epoch="$(date +%s)"
+          echo "$((end_epoch-start_epoch))" > recovery-evidence/restore-duration-seconds.txt
+
+          docker run --rm --network host             -e PGPASSWORD=postgres postgres:18             pg_dump -h 127.0.0.1 -U postgres             --schema-only --no-owner --no-privileges             trendradar_instagram_restore             | grep -vE '^\\\\(un)?restrict '             > recovery-evidence/restored-schema.sql
+
+          sha256sum recovery-evidence/source-schema.sql             > recovery-evidence/source-schema.sha256
+          sha256sum recovery-evidence/restored-schema.sql             > recovery-evidence/restored-schema.sha256
+          diff -u recovery-evidence/source-schema.sql recovery-evidence/restored-schema.sql             > recovery-evidence/schema-diff.txt
+
+      - name: Verify restored bytes, constraints, and fail-closed state semantics
+        run: |
+          set -euo pipefail
+          python ops/instagram/recovery_drill.py verify             --dsn "$RESTORE_DSN"             --expected recovery-evidence/source-snapshot.json             --evidence recovery-evidence/restored-verification.json
+
+      - name: Verify corrupted backup fails closed
+        run: |
+          set -euo pipefail
+          cp recovery-evidence/instagram-recovery.dump recovery-evidence/corrupted.dump
+          python - <<'PY'
+          from pathlib import Path
+          p = Path("recovery-evidence/corrupted.dump")
+          data = p.read_bytes()
+          p.write_bytes(data[:-512])
+          PY
+          docker run --rm --network host             -e PGPASSWORD=postgres postgres:18             createdb -h 127.0.0.1 -U postgres trendradar_corrupt_restore
+          set +e
+          docker run --rm --network host             -i -e PGPASSWORD=postgres postgres:18             pg_restore -h 127.0.0.1 -U postgres             --no-owner --no-privileges             -d trendradar_corrupt_restore             < recovery-evidence/corrupted.dump             > recovery-evidence/corrupt-restore.stdout.txt             2> recovery-evidence/corrupt-restore.stderr.txt
+          rc=$?
+          set -e
+          echo "$rc" > recovery-evidence/corrupt-restore-exit-code.txt
+          test "$rc" -ne 0
+
+      - name: Finalize recovery evidence
+        run: |
+          set -euo pipefail
+          printf '%s\n'             'ISOLATED_BACKUP_CREATE=PASS'             'ISOLATED_RESTORE_TO_CLEAN_DB=PASS'             'RESTORED_STATE_AND_INDEX_INTEGRITY=PASS'             'RESTORED_FAIL_CLOSED_AMBIGUITY_SEMANTICS=PASS'             'CORRUPTED_BACKUP_REJECTED=PASS'             'PRODUCTION_DATABASE_WAS_NOT_ACCESSED_OR_MUTATED=TRUE'             > recovery-evidence/result.txt
+          find recovery-evidence -type f ! -name EVIDENCE_SHA256SUMS.txt -printf '%P\n'             | sort             | xargs -I{} sha256sum "recovery-evidence/{}"             > recovery-evidence/EVIDENCE_SHA256SUMS.txt
+
+      - name: Upload recovery evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: instagram-isolated-backup-restore-dr-evidence
+          path: recovery-evidence/
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 6
+
+  live-readonly-monitor:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout monitor
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Run bounded read-only live probe
+        run: |
+          set -euo pipefail
+          mkdir -p monitor-evidence
+          python ops/instagram/live_readonly_monitor.py             --expected-backend-revision "$EXPECTED_LIVE_R4_REVISION"             --evidence monitor-evidence/live-monitor.json
+          printf '%s\n'             'LIVE_MONITOR_LOGIC=PASS'             'LIVE_PROBES_READ_ONLY=TRUE'             'ALERT_DELIVERY_DRILL=NOT_VERIFIED'             > monitor-evidence/result.txt
+          find monitor-evidence -type f ! -name EVIDENCE_SHA256SUMS.txt -printf '%P\n'             | sort             | xargs -I{} sha256sum "monitor-evidence/{}"             > monitor-evidence/EVIDENCE_SHA256SUMS.txt
+
+      - name: Upload monitor evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: instagram-live-readonly-monitor-evidence
+          path: monitor-evidence/
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 6
