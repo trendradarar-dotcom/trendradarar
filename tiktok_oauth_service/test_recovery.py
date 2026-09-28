@@ -91,6 +91,24 @@ class RecoveryTests(unittest.TestCase):
         with self.assertRaises(DurableStateError):
             reopened.transition_publication("idem-unknown","UPLOAD_STARTED",now=408)
 
+    def test_recovery_marker_survives_backup_restore(self):
+        self.store.set_recovery_marker("qualification","marker-value",now=1200)
+        marker=self.store.get_recovery_marker("qualification")
+        self.assertEqual(marker["value"],"marker-value")
+
+        backup=os.path.join(self.tmp.name,"marker-backup.sqlite3")
+        result=self.store.backup_to(backup)
+        self.assertTrue(result["sha256"])
+
+        restored_path=os.path.join(self.tmp.name,"marker-restored.sqlite3")
+        restored=DurableState.restore_backup(
+            backup,restored_path,[self.key]
+        )
+        restored_marker=restored.get_recovery_marker("qualification")
+        self.assertEqual(restored_marker["value"],"marker-value")
+        self.assertTrue(restored.delete_recovery_marker("qualification"))
+        self.assertIsNone(restored.get_recovery_marker("qualification"))
+
     def test_restore_refuses_overwrite(self):
         self.store.backup_to(self.backup)
         open(self.restored,"wb").close()
