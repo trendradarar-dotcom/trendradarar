@@ -7,6 +7,7 @@ on:
       - instagram-production-remediation-r2-20260928
       - instagram-production-remediation-r3-20260928
       - instagram-production-remediation-r4-20260928
+      - instagram-production-remediation-r5-20260928
     paths:
       - "instagram_oauth_service/**"
       - "instagram_oauth_gateway/**"
@@ -14,6 +15,7 @@ on:
       - "tests/test_instagram_gateway.py"
       - "tests/test_instagram_postgres_integration.py"
       - "tests/test_instagram_postgres_runtime.py"
+      - "tests/test_instagram_media_full_decode.py"
       - ".github/workflows/instagram-publisher-ci.yml"
   workflow_dispatch:
 
@@ -82,6 +84,7 @@ jobs:
         run: |
           python -m unittest -v tests.test_instagram_publisher
           python -m unittest -v tests.test_instagram_gateway
+          python -m unittest -v tests.test_instagram_media_full_decode
           python -m unittest -v tests.test_instagram_postgres_integration
           python -m unittest -v tests.test_instagram_postgres_runtime
       - name: Record resolved dependency set

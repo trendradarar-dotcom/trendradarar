@@ -20,7 +20,7 @@ from flask import Flask, Response, jsonify, redirect, request, send_file, sessio
 from publisher_runtime import IntentValidationError, PublisherRuntime
 
 APP_NAME = "Trend Radar — Instagram Reels"
-BUILD_REVISION = "M26.6-R4-PRODUCTION-ADMISSION-20260928"
+BUILD_REVISION = "M26.7-R5-FULL-DECODE-PREFLIGHT-20260928"
 API_VERSION = os.getenv("INSTAGRAM_API_VERSION", "v26.0").strip() or "v26.0"
 APP_ID = os.getenv("INSTAGRAM_APP_ID", "").strip()
 APP_SECRET = os.getenv("INSTAGRAM_APP_SECRET", "").strip()
@@ -305,6 +305,40 @@ def _mp4_signature_preflight(blob, declared_audio_codec=""):
     return True, None
 
 
+def _decode_media_stream_fully(blob, stream_kind):
+    try:
+        with av.open(io.BytesIO(bytes(blob)), mode="r") as container:
+            streams = (
+                list(container.streams.video)
+                if stream_kind == "video"
+                else list(container.streams.audio)
+            )
+            if not streams:
+                return 0, None
+            if len(streams) != 1:
+                return 0, "MEDIA_STREAM_LAYOUT_NOT_ALLOWED"
+            frame_count = 0
+            if stream_kind == "video":
+                for _frame in container.decode(video=0):
+                    frame_count += 1
+            else:
+                for _frame in container.decode(audio=0):
+                    frame_count += 1
+    except Exception:
+        return 0, (
+            "MEDIA_VIDEO_DECODE_FAILED"
+            if stream_kind == "video"
+            else "MEDIA_AUDIO_DECODE_FAILED"
+        )
+    if frame_count <= 0:
+        return 0, (
+            "MEDIA_VIDEO_NO_DECODABLE_FRAMES"
+            if stream_kind == "video"
+            else "MEDIA_AUDIO_NO_DECODABLE_FRAMES"
+        )
+    return frame_count, None
+
+
 def _inspect_media_blob(blob):
     try:
         with av.open(io.BytesIO(bytes(blob)), mode="r") as container:
@@ -345,21 +379,34 @@ def _inspect_media_blob(blob):
                 audio_codec = str(audio.codec_context.name or "").lower()
                 audio_sample_rate_hz = int(audio.codec_context.sample_rate or 0)
                 audio_bitrate_bps = int((audio_bytes * 8) / duration_seconds)
-            verified = {
-                "mime_type": "video/mp4",
-                "size_bytes": len(blob),
-                "duration_seconds": round(duration_seconds, 6),
-                "width": width,
-                "height": height,
-                "fps": round(fps, 6),
-                "video_codec": video_codec,
-                "audio_codec": audio_codec,
-                "video_bitrate_bps": video_bitrate_bps,
-                "audio_sample_rate_hz": audio_sample_rate_hz,
-                "audio_bitrate_bps": audio_bitrate_bps,
-            }
     except Exception:
         return None, "MEDIA_PARSE_FAILED"
+
+    decoded_video_frames, decode_error = _decode_media_stream_fully(blob, "video")
+    if decode_error:
+        return None, decode_error
+
+    decoded_audio_frames = 0
+    if audio_codec != "none":
+        decoded_audio_frames, decode_error = _decode_media_stream_fully(blob, "audio")
+        if decode_error:
+            return None, decode_error
+
+    verified = {
+        "mime_type": "video/mp4",
+        "size_bytes": len(blob),
+        "duration_seconds": round(duration_seconds, 6),
+        "width": width,
+        "height": height,
+        "fps": round(fps, 6),
+        "video_codec": video_codec,
+        "audio_codec": audio_codec,
+        "video_bitrate_bps": video_bitrate_bps,
+        "audio_sample_rate_hz": audio_sample_rate_hz,
+        "audio_bitrate_bps": audio_bitrate_bps,
+        "decoded_video_frames": decoded_video_frames,
+        "decoded_audio_frames": decoded_audio_frames,
+    }
     if verified["video_codec"] not in {"h264", "avc", "avc1"}:
         return None, "MEDIA_VIDEO_CODEC_NOT_ALLOWED"
     if not 3 <= verified["duration_seconds"] <= 900:
