@@ -158,6 +158,14 @@ class DurableState:
                     detail_json TEXT NOT NULL DEFAULT '{}'
                 )"""
             )
+            con.execute(
+                """CREATE TABLE IF NOT EXISTS recovery_markers(
+                    marker_key TEXT PRIMARY KEY,
+                    marker_value_cipher BLOB NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL
+                )"""
+            )
             con.execute("CREATE INDEX IF NOT EXISTS idx_oauth_states_exp ON oauth_states(expires_at)")
             con.execute("CREATE INDEX IF NOT EXISTS idx_sessions_exp ON sessions(expires_at)")
             con.execute("CREATE INDEX IF NOT EXISTS idx_handoffs_exp ON handoffs(expires_at)")
@@ -181,6 +189,57 @@ class DurableState:
         if not isinstance(value, dict):
             raise DurableStateError("encrypted state payload is not an object")
         return value
+
+    def set_recovery_marker(self, marker_key, marker_value, now=None):
+        marker_key = str(marker_key or "").strip()
+        marker_value = str(marker_value or "")
+        if not marker_key or not marker_value:
+            raise DurableStateError("recovery marker key and value are required")
+        now = int(time.time() if now is None else now)
+        cipher = self._encrypt_json({"value": marker_value})
+        with self._lock, closing(self._connect()) as con:
+            con.execute("BEGIN IMMEDIATE")
+            existing = con.execute(
+                "SELECT created_at FROM recovery_markers WHERE marker_key=?",
+                (marker_key,),
+            ).fetchone()
+            created_at = int(existing["created_at"]) if existing else now
+            con.execute(
+                """INSERT INTO recovery_markers(marker_key,marker_value_cipher,created_at,updated_at)
+                   VALUES(?,?,?,?)
+                   ON CONFLICT(marker_key) DO UPDATE SET
+                     marker_value_cipher=excluded.marker_value_cipher,
+                     updated_at=excluded.updated_at""",
+                (marker_key, cipher, created_at, now),
+            )
+            con.execute("COMMIT")
+
+    def get_recovery_marker(self, marker_key):
+        marker_key = str(marker_key or "").strip()
+        if not marker_key:
+            return None
+        with self._lock, closing(self._connect()) as con:
+            row = con.execute(
+                "SELECT marker_value_cipher,created_at,updated_at FROM recovery_markers WHERE marker_key=?",
+                (marker_key,),
+            ).fetchone()
+        if not row:
+            return None
+        payload = self._decrypt_json(row["marker_value_cipher"])
+        return {
+            "marker_key": marker_key,
+            "value": str(payload.get("value","")),
+            "created_at": int(row["created_at"]),
+            "updated_at": int(row["updated_at"]),
+        }
+
+    def delete_recovery_marker(self, marker_key):
+        marker_key = str(marker_key or "").strip()
+        if not marker_key:
+            return False
+        with self._lock, closing(self._connect()) as con:
+            cur = con.execute("DELETE FROM recovery_markers WHERE marker_key=?", (marker_key,))
+            return bool(cur.rowcount)
 
     def upsert_session(self, sid, payload, now=None, ttl=86400):
         if not sid:
