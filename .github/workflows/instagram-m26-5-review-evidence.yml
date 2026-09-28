@@ -1,0 +1,137 @@
+name: Instagram M26.5 Review Evidence
+
+on:
+  push:
+    branches:
+      - instagram-production-remediation-r3-20260928
+    paths:
+      - ".github/workflows/instagram-m26-5-review-evidence.yml"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  evidence:
+    runs-on: ubuntu-24.04
+    env:
+      EXACT_TARGET: 19221407a62969104aa386df64d5cc703d5f36b5
+      EXACT_TREE: 822407ac475d33b9e1a12919bf3367bd615c8ddf
+      REVIEW_REQUEST: 23df46f21099bbabd4caacc57a28e32792e38ad6
+      CI_RUN: "36369036287"
+    steps:
+      - name: Checkout full repository history
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Build exact Git and source evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p review-evidence
+
+          test "$(git rev-parse "$EXACT_TARGET^{tree}")" = "$EXACT_TREE"
+          test "$(git rev-parse "$REVIEW_REQUEST^")" = "$EXACT_TARGET"
+
+          git cat-file -p "$EXACT_TARGET" > review-evidence/exact-target-commit.raw.txt
+          git cat-file -p "$REVIEW_REQUEST" > review-evidence/review-request-commit.raw.txt
+          git rev-parse "$EXACT_TARGET^{tree}" > review-evidence/exact-target-tree-root.txt
+          git rev-parse "$REVIEW_REQUEST^{tree}" > review-evidence/review-request-tree-root.txt
+          git ls-tree -r -t "$EXACT_TARGET" > review-evidence/exact-target-ls-tree.txt
+          git ls-tree -r -t "$REVIEW_REQUEST" > review-evidence/review-request-ls-tree.txt
+          git diff --name-status "$EXACT_TARGET" "$REVIEW_REQUEST" > review-evidence/target-to-review.name-status.txt
+          git diff --stat "$EXACT_TARGET" "$REVIEW_REQUEST" > review-evidence/target-to-review.stat.txt
+          git diff --binary "$EXACT_TARGET" "$REVIEW_REQUEST" > review-evidence/target-to-review.patch
+
+          git diff --quiet "$EXACT_TARGET" "$REVIEW_REQUEST" --             .             ":(exclude)review/instagram/M26_5_INDEPENDENT_REVIEW_REQUEST_20260928.md"
+          printf 'PASS: the only target-to-review file delta is review/instagram/M26_5_INDEPENDENT_REVIEW_REQUEST_20260928.md\n'             > review-evidence/documentation-only-delta-proof.txt
+
+          git archive --format=zip --output=review-evidence/exact-target-source.zip "$EXACT_TARGET"
+
+          git branch -f evidence-exact-target "$EXACT_TARGET"
+          git branch -f evidence-review-request "$REVIEW_REQUEST"
+          git bundle create review-evidence/instagram-m26-5-exact-and-review.bundle             refs/heads/evidence-exact-target refs/heads/evidence-review-request
+          git bundle verify review-evidence/instagram-m26-5-exact-and-review.bundle             > review-evidence/git-bundle-verify.txt 2>&1
+
+          git show "$EXACT_TARGET:.github/workflows/instagram-publisher-ci.yml"             > review-evidence/exact-target-instagram-publisher-ci.yml
+          git show "$EXACT_TARGET:instagram_oauth_service/requirements.txt"             > review-evidence/exact-target-backend-requirements.txt
+          git show "$EXACT_TARGET:instagram_oauth_gateway/requirements.txt"             > review-evidence/exact-target-gateway-requirements.txt
+          git show "$EXACT_TARGET:tests/test_instagram_publisher.py"             > review-evidence/exact-target-test-instagram-publisher.py
+          git show "$EXACT_TARGET:tests/test_instagram_gateway.py"             > review-evidence/exact-target-test-instagram-gateway.py
+
+          {
+            echo "EXACT_TARGET=$EXACT_TARGET"
+            echo "EXACT_TREE=$EXACT_TREE"
+            echo "REVIEW_REQUEST=$REVIEW_REQUEST"
+            echo "CI_RUN=$CI_RUN"
+            echo "GENERATED_FROM_WORKFLOW_COMMIT=$GITHUB_SHA"
+          } > review-evidence/EVIDENCE_IDENTITY.txt
+
+      - name: Capture exact CI evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CI_RUN"             > review-evidence/exact-target-ci-run.json
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CI_RUN/jobs?per_page=100"             > review-evidence/exact-target-ci-jobs.json
+          gh run view "$CI_RUN" --repo "$GITHUB_REPOSITORY" --log             > review-evidence/exact-target-ci.log
+
+          python - <<'PY'
+          import json, os, pathlib
+          p=pathlib.Path("review-evidence/exact-target-ci-run.json")
+          run=json.loads(p.read_text())
+          expected=os.environ["EXACT_TARGET"]
+          assert run["head_sha"] == expected, (run["head_sha"], expected)
+          assert run["status"] == "completed"
+          assert run["conclusion"] == "success"
+          pathlib.Path("review-evidence/ci-binding-proof.txt").write_text(
+              f"PASS: CI run {run['id']} completed SUCCESS on head_sha={run['head_sha']}\n"
+          )
+          PY
+
+      - name: Add offline reviewer verification script
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > review-evidence/VERIFY_OFFLINE.sh <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          TARGET="19221407a62969104aa386df64d5cc703d5f36b5"
+          TREE="822407ac475d33b9e1a12919bf3367bd615c8ddf"
+          REVIEW="23df46f21099bbabd4caacc57a28e32792e38ad6"
+
+          rm -rf verify-repo
+          git clone instagram-m26-5-exact-and-review.bundle verify-repo
+          cd verify-repo
+          test "$(git cat-file -t "$TARGET")" = commit
+          test "$(git rev-parse "$TARGET^{tree}")" = "$TREE"
+          test "$(git rev-parse "$REVIEW^")" = "$TARGET"
+
+          changed="$(git diff --name-only "$TARGET" "$REVIEW")"
+          test "$changed" = "review/instagram/M26_5_INDEPENDENT_REVIEW_REQUEST_20260928.md"
+
+          rm -rf ../exact-checkout
+          mkdir ../exact-checkout
+          git archive "$TARGET" | tar -x -C ../exact-checkout
+          printf 'PASS: commit, tree, review-parent, and documentation-only delta verified.\n'
+          SH
+          chmod +x review-evidence/VERIFY_OFFLINE.sh
+
+      - name: Hash all review evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd review-evidence
+          find . -maxdepth 1 -type f ! -name SHA256SUMS.txt -printf '%f\n'             | sort             | xargs sha256sum > SHA256SUMS.txt
+
+      - name: Upload verifiable evidence package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: TrendRadar-Instagram-M26.5-Verifiable-Review-Evidence
+          path: review-evidence/
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 6
