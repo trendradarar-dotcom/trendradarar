@@ -25,6 +25,8 @@ class SafetyGateTests(unittest.TestCase):
 
     def _configure_store(self):
         self.tmp = tempfile.TemporaryDirectory()
+        os.environ["TIKTOK_STATE_BACKEND"] = "sqlite"
+        os.environ["TIKTOK_RUNTIME_MODE"] = "test"
         os.environ["TIKTOK_STATE_DB_PATH"] = os.path.join(self.tmp.name, "state.sqlite3")
         os.environ["TIKTOK_STATE_ENCRYPTION_KEY"] = Fernet.generate_key().decode()
         app._STORE = None
