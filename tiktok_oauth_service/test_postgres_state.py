@@ -210,6 +210,41 @@ class PostgresDurableStateTests(unittest.TestCase):
         with self.assertRaises(DurableStateError):
             reopened.transition_publication(idem,"UPLOAD_STARTED",now=7008)
 
+    def test_unavailable_postgres_fails_closed_without_sqlite_fallback(self):
+        unreachable = "postgresql://postgres:postgres@127.0.0.1:1/unreachable"
+        with self.assertRaises(DurableStateError):
+            PostgresDurableState(unreachable,[self.key])
+
+    def test_concurrent_terminal_transition_is_atomic(self):
+        idem="idem-terminal-race"
+        self.store.create_publication_intent(
+            idem,"5"*64,"acct-race","DIRECT_POST","6"*64,now=7500
+        )
+        ok,_=self.store.admit_publication(idem,20,100,5,10,40,200,now=7501)
+        self.assertTrue(ok)
+        self.store.transition_publication(idem,"SAFETY_APPROVED",now=7502)
+        self.store.begin_publication_attempt(idem,now=7503)
+        self.store.transition_publication(idem,"PUBLISH_REQUESTED",now=7504)
+        self.store.transition_publication(
+            idem,"UPLOAD_STARTED",now=7505,provider_publish_id="provider-race"
+        )
+        self.store.transition_publication(idem,"UPLOADED",now=7506)
+        self.store.transition_publication(idem,"PROCESSING",now=7507)
+
+        stores=[PostgresDurableState(self.dsn,[self.key]) for _ in range(2)]
+        def terminal(args):
+            store,state=args
+            try:
+                store.transition_publication(idem,state,now=7510)
+                return state,"ok"
+            except DurableStateError:
+                return state,"blocked"
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            outcomes=dict(pool.map(terminal,[(stores[0],"PUBLISHED"),(stores[1],"FAILED")]))
+        self.assertEqual(sorted(outcomes.values()),["blocked","ok"])
+        final=self.store.get_publication(idem)["state"]
+        self.assertIn(final,("PUBLISHED","FAILED"))
+
     def test_encrypted_logical_backup_restore_preserves_duplicate_barrier(self):
         self._create_published(self.store)
         self.store.set_recovery_marker("qualification","marker-secret",now=8000)
@@ -217,7 +252,8 @@ class PostgresDurableStateTests(unittest.TestCase):
             backup=os.path.join(td,"postgres.backup")
             info=self.store.backup_to(backup)
             self.assertEqual(len(info["sha256"]),64)
-            raw=open(backup,"rb").read()
+            with open(backup,"rb") as handle:
+                raw=handle.read()
             self.assertNotIn(b"marker-secret",raw)
             self.assertNotIn(b"provider-pub",raw)
 
@@ -232,6 +268,8 @@ class PostgresDurableStateTests(unittest.TestCase):
             rec=restored.get_publication("idem-pub")
             self.assertEqual(rec["state"],"PUBLISHED")
             self.assertEqual(rec["provider_publish_id"],"provider-pub")
+            audit=restored.list_audit_events("idem-pub",limit=100)
+            self.assertGreaterEqual(len(audit),2)
             same,created=restored.create_publication_intent(
                 "idem-pub","a"*64,"acct","DIRECT_POST","b"*64,now=9000
             )
