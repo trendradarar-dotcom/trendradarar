@@ -161,6 +161,90 @@ class OpsWatchdogTests(unittest.TestCase):
         self.assertTrue(result["attention_required"])
         self.assertEqual(result["error"], "unknown_count_invalid")
 
+    def test_fractional_unknown_count_fails_closed(self):
+        payload = {
+            "ok": True,
+            "durable_state_ready": True,
+            "attention_required": False,
+            "unknown_count": 0.5,
+            "stale_nonterminal_count": 0,
+        }
+        with mock.patch.object(watchdog, "_json_request", return_value=(200, payload)):
+            result = watchdog.fetch_health("https://example.invalid/ops/health")
+        self.assertFalse(result["reachable"])
+        self.assertTrue(result["attention_required"])
+        self.assertEqual(result["error"], "unknown_count_invalid")
+
+    def test_negative_fractional_unknown_count_fails_closed(self):
+        payload = {
+            "ok": True,
+            "durable_state_ready": True,
+            "attention_required": False,
+            "unknown_count": -0.5,
+            "stale_nonterminal_count": 0,
+        }
+        with mock.patch.object(watchdog, "_json_request", return_value=(200, payload)):
+            result = watchdog.fetch_health("https://example.invalid/ops/health")
+        self.assertFalse(result["reachable"])
+        self.assertTrue(result["attention_required"])
+        self.assertEqual(result["error"], "unknown_count_invalid")
+
+    def test_fractional_stale_count_fails_closed(self):
+        payload = {
+            "ok": True,
+            "durable_state_ready": True,
+            "attention_required": False,
+            "unknown_count": 0,
+            "stale_nonterminal_count": 0.5,
+        }
+        with mock.patch.object(watchdog, "_json_request", return_value=(200, payload)):
+            result = watchdog.fetch_health("https://example.invalid/ops/health")
+        self.assertFalse(result["reachable"])
+        self.assertTrue(result["attention_required"])
+        self.assertEqual(result["error"], "stale_nonterminal_count_invalid")
+
+    def test_negative_fractional_stale_count_fails_closed(self):
+        payload = {
+            "ok": True,
+            "durable_state_ready": True,
+            "attention_required": False,
+            "unknown_count": 0,
+            "stale_nonterminal_count": -0.5,
+        }
+        with mock.patch.object(watchdog, "_json_request", return_value=(200, payload)):
+            result = watchdog.fetch_health("https://example.invalid/ops/health")
+        self.assertFalse(result["reachable"])
+        self.assertTrue(result["attention_required"])
+        self.assertEqual(result["error"], "stale_nonterminal_count_invalid")
+
+    def test_integral_float_is_still_not_a_real_json_integer(self):
+        payload = {
+            "ok": True,
+            "durable_state_ready": True,
+            "attention_required": False,
+            "unknown_count": 1.0,
+            "stale_nonterminal_count": 0,
+        }
+        with mock.patch.object(watchdog, "_json_request", return_value=(200, payload)):
+            result = watchdog.fetch_health("https://example.invalid/ops/health")
+        self.assertFalse(result["reachable"])
+        self.assertTrue(result["attention_required"])
+        self.assertEqual(result["error"], "unknown_count_invalid")
+
+    def test_numeric_string_count_fails_closed(self):
+        payload = {
+            "ok": True,
+            "durable_state_ready": True,
+            "attention_required": False,
+            "unknown_count": "1",
+            "stale_nonterminal_count": 0,
+        }
+        with mock.patch.object(watchdog, "_json_request", return_value=(200, payload)):
+            result = watchdog.fetch_health("https://example.invalid/ops/health")
+        self.assertFalse(result["reachable"])
+        self.assertTrue(result["attention_required"])
+        self.assertEqual(result["error"], "unknown_count_invalid")
+
     def test_alert_is_hmac_signed(self):
         captured = {}
 
