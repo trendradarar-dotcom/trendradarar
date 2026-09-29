@@ -2,3 +2,5 @@ av==18.1.0
 cryptography==46.0.1
 cffi==2.1.1
 pycparser==3.0
+psycopg==3.3.6
+psycopg-binary==3.3.6
