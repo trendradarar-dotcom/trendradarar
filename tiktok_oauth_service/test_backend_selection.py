@@ -43,6 +43,39 @@ class BackendSelectionTests(unittest.TestCase):
             with self.assertRaises(DurableStateError):
                 DurableState.from_env()
 
+    def test_missing_backend_fails_closed(self):
+        env = {
+            "TIKTOK_STATE_BACKEND": "",
+            "TIKTOK_RUNTIME_MODE": "test",
+            "TIKTOK_STATE_ENCRYPTION_KEY": Fernet.generate_key().decode(),
+        }
+        with mock.patch.dict(os.environ, env, clear=False):
+            with self.assertRaises(DurableStateError):
+                DurableState.from_env()
+
+    def test_missing_runtime_mode_fails_closed(self):
+        with tempfile.TemporaryDirectory() as td:
+            env = {
+                "TIKTOK_STATE_BACKEND": "sqlite",
+                "TIKTOK_RUNTIME_MODE": "",
+                "TIKTOK_STATE_DB_PATH": os.path.join(td, "state.sqlite3"),
+                "TIKTOK_STATE_ENCRYPTION_KEY": Fernet.generate_key().decode(),
+            }
+            with mock.patch.dict(os.environ, env, clear=False):
+                with self.assertRaises(DurableStateError):
+                    DurableState.from_env()
+
+    def test_invalid_postgres_url_fails_closed(self):
+        env = {
+            "TIKTOK_STATE_BACKEND": "postgresql",
+            "TIKTOK_RUNTIME_MODE": "production",
+            "TIKTOK_POSTGRES_URL": "sqlite:///not-postgres",
+            "TIKTOK_STATE_ENCRYPTION_KEY": Fernet.generate_key().decode(),
+        }
+        with mock.patch.dict(os.environ, env, clear=False):
+            with self.assertRaises(DurableStateError):
+                DurableState.from_env()
+
     def test_unknown_backend_fails_closed(self):
         env = {
             "TIKTOK_STATE_BACKEND": "memory",
