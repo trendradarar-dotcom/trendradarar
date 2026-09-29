@@ -78,9 +78,17 @@ class DurableState:
             raw_keys = os.environ.get("TIKTOK_STATE_ENCRYPTION_KEY", "").strip()
         keys = [k.strip() for k in raw_keys.split(",") if k.strip()]
 
-        backend = os.environ.get("TIKTOK_STATE_BACKEND", "sqlite").strip().lower()
-        runtime_mode = os.environ.get("TIKTOK_RUNTIME_MODE", "development").strip().lower()
+        backend = os.environ.get("TIKTOK_STATE_BACKEND", "").strip().lower()
+        runtime_mode = os.environ.get("TIKTOK_RUNTIME_MODE", "").strip().lower()
+        if not backend:
+            raise DurableStateError("TIKTOK_STATE_BACKEND is required")
+        if not runtime_mode:
+            raise DurableStateError("TIKTOK_RUNTIME_MODE is required")
+
         production = runtime_mode in ("production", "prod")
+        development = runtime_mode in ("development", "dev", "test", "local")
+        if not production and not development:
+            raise DurableStateError("unsupported TIKTOK_RUNTIME_MODE")
 
         if production and backend not in ("postgres", "postgresql"):
             raise DurableStateError(
@@ -88,6 +96,8 @@ class DurableState:
             )
 
         if backend == "sqlite":
+            if not development:
+                raise DurableStateError("SQLite is restricted to test/development")
             return cls(os.environ.get("TIKTOK_STATE_DB_PATH", ""), keys)
 
         if backend in ("postgres", "postgresql"):
