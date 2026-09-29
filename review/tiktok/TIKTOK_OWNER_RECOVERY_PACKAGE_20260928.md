@@ -92,7 +92,10 @@ Required or security-relevant:
 - `TIKTOK_REDIRECT_URI`
 - `TIKTOK_SCOPES`
 - `PUBLIC_BASE_URL`
-- `TIKTOK_STATE_DB_PATH`
+- `TIKTOK_RUNTIME_MODE`
+- `TIKTOK_STATE_BACKEND`
+- `TIKTOK_STATE_DB_PATH` — SQLite test/dev only
+- `TIKTOK_POSTGRES_URL` — TikTok-dedicated PostgreSQL production URL
 - `TIKTOK_STATE_ENCRYPTION_KEY` or `TIKTOK_STATE_ENCRYPTION_KEYS`
 - `TIKTOK_MUTATIONS_ENABLED`
 - `TIKTOK_KILL_SWITCH`
@@ -174,18 +177,19 @@ No deployment is required to execute these internal tests.
 Current application start command:
 `python tiktok_oauth_service/app.py`
 
-The remediation runtime additionally requires a production-persistent `TIKTOK_STATE_DB_PATH` and encryption key configuration. If the database path is not configured or state initialization fails, OAuth/mutation paths fail closed.
+The successor R5 runtime requires explicit state-backend selection. SQLite is restricted to test/development. Production requires `TIKTOK_RUNTIME_MODE=production`, `TIKTOK_STATE_BACKEND=postgresql`, a TikTok-dedicated `TIKTOK_POSTGRES_URL`, and the state encryption key configuration. Missing/invalid/unavailable PostgreSQL fails closed; there is no silent SQLite fallback.
 
 ## 11. Important infrastructure blocker
 
-The currently verified Render TikTok service is on the pre-remediation branch and no production-persistent TikTok state volume/database has yet been evidenced for this remediation target.
+The held R5 admission runtime remains the old exact target `ece8039623ee82176d756591af9495414a80d3d6` until a PostgreSQL successor is independently accepted. SQLite/Persistent Disk is not the final R5 production architecture.
 
 Therefore:
-- the remediation branch MUST NOT be represented as production-persistence PASS;
-- it MUST NOT be deployed during the pending TikTok App Review merely to obtain evidence;
-- final production admission requires a durable production state backend/volume, backup location and restore evidence bound to the deployed target.
+- the PostgreSQL remediation branch MUST NOT be represented as production-persistence PASS;
+- production cutover remains HOLD;
+- the old resource MUST be preserved;
+- final production admission requires a TikTok-dedicated PostgreSQL backend plus production-bound persistence/restart/backup/restore evidence.
 
-No paid infrastructure is authorized by this package.
+Infrastructure authorization and cutover are separate later gates.
 
 ## 12. Kill switch
 
@@ -213,12 +217,13 @@ A new OAuth authorization is required to reconnect.
 ## 14. Backup / restore
 
 Implementation:
-- SQLite online backup API
-- source/destination `PRAGMA quick_check`
-- SHA-256 of backup
-- restore refuses to overwrite an existing target
+- SQLite online backup remains test/dev-only.
+- PostgreSQL adds an application-level encrypted logical backup using a consistent repeatable-read snapshot.
+- the complete logical snapshot is Fernet/MultiFernet encrypted and SHA-256 identified.
+- PostgreSQL restore refuses a non-empty target, preserves publication/provider/audit/recovery-marker state, and restores event sequences.
+- production off-runtime backup destination and provider-native recovery remain separate R5 production evidence gates.
 
-Tests prove a restored database retains a PUBLISHED record and continues to reject a duplicate intent for the same idempotency key.
+Tests prove a restored PostgreSQL database retains a PUBLISHED record, audit continuity and the duplicate barrier for the same idempotency key.
 
 ## 15. Reconciliation
 
@@ -351,3 +356,35 @@ The new R4.1 finding was narrower than the original R4 watchdog failures:
 - this permitted invalid fractional counters to avoid fail-closed handling.
 
 Post-R4.1 remediation removes numeric coercion. Health counters are accepted only when the parsed JSON value is an actual non-negative integer. This document does NOT self-close R4-02 or R4-03; focused independent retest is still required.
+
+
+## 24. PostgreSQL production-backend transition
+
+Governing architecture:
+- `DurableState.from_env()` is the selection boundary.
+- SQLite = test/development only.
+- PostgreSQL = required final production backend.
+- production PostgreSQL failure = fail closed.
+- no silent fallback to SQLite.
+
+The PostgreSQL implementation preserves:
+- encrypted sensitive state;
+- unique persistent idempotency;
+- transactional admission;
+- row-locked atomic state transitions;
+- conservative cross-instance admission serialization;
+- provider publication ID uniqueness;
+- UNKNOWN-state safety;
+- hard-limit history;
+- audit continuity;
+- encrypted logical backup/restore;
+- duplicate prevention after restart/redelivery/restore.
+
+Current runtime/cutover status:
+- old exact runtime remains preserved;
+- production cutover = HOLD;
+- full rewrite = forbidden unless evidence requires it;
+- next gate = new exact PostgreSQL candidate + directed independent retest.
+
+See:
+`review/tiktok/TIKTOK_R5_POSTGRES_DURABLE_STATE_ARCHITECTURE_20260929.md`
