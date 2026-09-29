@@ -39,6 +39,7 @@ class DirectBridgeRemediationTests(unittest.TestCase):
             "SNAPCHAT_TOKEN_ENCRYPTION_KEY": Fernet.generate_key().decode("ascii"),
             "SNAPCHAT_PUBLIC_PROFILE_ID": "3f5d8925-0da7-4da6-9b87-d8aa326026a0",
             "SNAPCHAT_EXPECTED_USERNAME": "trendradarar",
+            "SNAPCHAT_ORGANIZATION_ID": "0cf1ddf6-1ede-41af-bfd7-4d959ca89b1e",
             "SNAPCHAT_OWNER_KEY": "owner-key",
             "SNAPCHAT_DATABASE_URL": db_url,
         }
@@ -442,6 +443,106 @@ class StateStoreRecoveryTests(unittest.TestCase):
                 retry_horizon_seconds=1800,
             )
         self.assertEqual(str(ctx.exception), "maximum_concurrent_publications_reached")
+
+
+    def test_malformed_negative_safety_booleans_fail_closed(self):
+        db_url = self._sqlite_url()
+        base = self._env(
+            db_url,
+            SNAPCHAT_PUBLICATION_ENABLED="true",
+            SNAPCHAT_KILL_SWITCH="false",
+            SNAPCHAT_EMERGENCY_READ_ONLY="false",
+            SNAPCHAT_TARGET_ACCOUNT_VERIFIED="true",
+            SNAPCHAT_DURABLE_RECONCILIATION_READY="true",
+            SNAPCHAT_ALERTING_READY="true",
+            SNAPCHAT_PRODUCTION_ASSURANCE_READY="true",
+            SNAPCHAT_HARD_LIMITS_VERIFIED="true",
+        )
+
+        with patch.dict(os.environ, {**base, "SNAPCHAT_KILL_SWITCH": "garbage"}, clear=True):
+            errors = app_module._production_gate_errors()
+            self.assertIn("kill_switch_configuration_invalid", errors)
+            self.assertIn("kill_switch_active", errors)
+
+        with patch.dict(os.environ, {**base, "SNAPCHAT_EMERGENCY_READ_ONLY": "garbage"}, clear=True):
+            errors = app_module._production_gate_errors()
+            self.assertIn("emergency_read_only_configuration_invalid", errors)
+            self.assertIn("emergency_read_only_active", errors)
+
+        with patch.dict(os.environ, {**base, "SNAPCHAT_PUBLICATION_ENABLED": "garbage"}, clear=True):
+            errors = app_module._production_gate_errors()
+            self.assertIn("publication_gate_configuration_invalid", errors)
+            self.assertIn("publication_gate_closed", errors)
+
+    def test_exact_profile_binding_requires_expected_organization(self):
+        db_url = self._sqlite_url()
+        env = self._env(db_url)
+        profile = {
+            "public_profile": {
+                "id": env["SNAPCHAT_PUBLIC_PROFILE_ID"],
+                "snap_user_name": env["SNAPCHAT_EXPECTED_USERNAME"],
+                "organization_id": env["SNAPCHAT_ORGANIZATION_ID"],
+                "display_name": "Trend Radar",
+            }
+        }
+        with patch.dict(os.environ, env, clear=True):
+            verified = app_module._verify_exact_profile_payload(profile)
+            self.assertEqual(verified["organization_id"], env["SNAPCHAT_ORGANIZATION_ID"])
+
+            wrong = {
+                "public_profile": {
+                    **profile["public_profile"],
+                    "organization_id": "11111111-1111-1111-1111-111111111111",
+                }
+            }
+            with self.assertRaisesRegex(RuntimeError, "public_profile_organization_id_mismatch"):
+                app_module._verify_exact_profile_payload(wrong)
+
+            missing = {
+                "public_profile": {
+                    "id": env["SNAPCHAT_PUBLIC_PROFILE_ID"],
+                    "snap_user_name": env["SNAPCHAT_EXPECTED_USERNAME"],
+                }
+            }
+            with self.assertRaisesRegex(RuntimeError, "public_profile_organization_id_missing"):
+                app_module._verify_exact_profile_payload(missing)
+
+    def test_approved_limits_are_non_bypassable_hard_ceilings(self):
+        db_url = self._sqlite_url()
+        env = self._env(db_url)
+        with patch.dict(os.environ, env, clear=True):
+            self.assertEqual(
+                app_module._limits(),
+                {
+                    "max_posts_per_hour": 2,
+                    "max_posts_per_day": 10,
+                    "max_concurrent_publishes": 1,
+                    "max_attempts_per_publication": 2,
+                    "retry_horizon_seconds": 1800,
+                },
+            )
+
+        adversarial = {
+            "SNAPCHAT_MAX_POSTS_PER_HOUR": "100",
+            "SNAPCHAT_MAX_POSTS_PER_DAY": "1000",
+            "SNAPCHAT_MAX_CONCURRENT_PUBLISHES": "10",
+            "SNAPCHAT_MAX_ATTEMPTS_PER_PUBLICATION": "10",
+            "SNAPCHAT_RETRY_HORIZON_SECONDS": "86400",
+        }
+        for name, value in adversarial.items():
+            with self.subTest(name=name):
+                probe = self._env(
+                    db_url,
+                    SNAPCHAT_HARD_LIMITS_VERIFIED="true",
+                    **{name: value},
+                )
+                with patch.dict(os.environ, probe, clear=True):
+                    with self.assertRaises(RuntimeError):
+                        app_module._limits()
+                    self.assertIn(
+                        "hard_limits_configuration_invalid",
+                        app_module._production_gate_errors(),
+                    )
 
 
 if __name__ == "__main__":
