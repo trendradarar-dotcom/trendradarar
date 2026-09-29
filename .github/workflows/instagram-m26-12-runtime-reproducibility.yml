@@ -91,7 +91,13 @@ jobs:
           set -euo pipefail
           source_epoch="$(git show -s --format=%ct "$R5_EXACT_TARGET")"
           export SOURCE_DATE_EPOCH="$source_epoch"
-          docker buildx build --no-cache --network=none --provenance=false --sbom=false --platform linux/amd64 --build-arg SOURCE_DATE_EPOCH="$source_epoch" --output "type=oci,dest=evidence/r5-runtime.oci.tar,rewrite-timestamp=true" -f ops/instagram/Dockerfile.reproducible-r5 context
+          builder="ig-m2612-oci-${{ matrix.copy }}-$GITHUB_RUN_ID"
+          docker buildx create --name "$builder" --driver docker-container --use
+          trap 'docker buildx rm "$builder" >/dev/null 2>&1 || true' EXIT
+          docker buildx inspect --bootstrap
+          docker buildx build --builder "$builder" --no-cache --network=none --provenance=false --sbom=false --platform linux/amd64 --build-arg SOURCE_DATE_EPOCH="$source_epoch" --output "type=oci,dest=evidence/r5-runtime.oci.tar,rewrite-timestamp=true" -f ops/instagram/Dockerfile.reproducible-r5 context
+          docker buildx rm "$builder"
+          trap - EXIT
           sha256sum evidence/r5-runtime.oci.tar > evidence/r5-runtime.oci.tar.sha256
           mkdir -p evidence/oci-layout
           tar -xf evidence/r5-runtime.oci.tar -C evidence/oci-layout
