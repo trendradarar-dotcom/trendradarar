@@ -1,0 +1,66 @@
+name: Instagram M26.12 Resolve Reproducible Runtime
+
+on:
+  push:
+    branches:
+      - instagram-environment-reproducibility-m26-12-20260929
+    paths:
+      - ".github/workflows/instagram-m26-12-runtime-reproducibility.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  resolve-runtime:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify R5 exact target
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse d41c1c1cdaa7cf374989e2b059db6a640cb51eef^{tree})" = "9b7d7c2ab974a55cc9073e24386f4cbe9de8437d"
+
+      - name: Resolve exact Python 3.14.3 container image
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          docker pull --platform linux/amd64 python:3.14.3-slim-bookworm
+          docker inspect python:3.14.3-slim-bookworm > evidence/python-image-inspect.json
+          docker inspect --format '{{index .RepoDigests 0}}' python:3.14.3-slim-bookworm | tee evidence/python-repodigest.txt
+          docker inspect --format '{{.Id}}' python:3.14.3-slim-bookworm | tee evidence/python-image-id.txt
+          docker run --rm --platform linux/amd64 python:3.14.3-slim-bookworm python - <<'PY' | tee evidence/python-runtime.txt
+          import platform, ssl, sys
+          print("python_version="+platform.python_version())
+          print("python_implementation="+platform.python_implementation())
+          print("python_build="+repr(platform.python_build()))
+          print("openssl="+ssl.OPENSSL_VERSION)
+          print("platform="+platform.platform())
+          print("executable="+sys.executable)
+          PY
+
+      - name: Verify pinned PostgreSQL 18 image
+        run: |
+          set -euo pipefail
+          docker pull --platform linux/amd64 postgres@sha256:5a5a84b19854a9ffaa54082c166ff4ec27473a361e496e5ea167f298f2da9722
+          docker inspect postgres@sha256:5a5a84b19854a9ffaa54082c166ff4ec27473a361e496e5ea167f298f2da9722 > evidence/postgres-image-inspect.json
+          docker run --rm --platform linux/amd64 postgres@sha256:5a5a84b19854a9ffaa54082c166ff4ec27473a361e496e5ea167f298f2da9722 postgres --version | tee evidence/postgres-version.txt
+
+      - name: Record runner boundary
+        run: |
+          set -euo pipefail
+          uname -a > evidence/runner-uname.txt
+          docker version > evidence/docker-version.txt
+          cat /etc/os-release > evidence/runner-os-release.txt
+          printf '%s\n'             'NOTE=Runner kernel/docker host are execution infrastructure, not part of the pinned application runtime.'             'TARGET_PLATFORM=linux/amd64'             > evidence/boundary.txt
+          (cd evidence && sha256sum * | sort > SHA256SUMS.txt)
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: instagram-m26-12-runtime-resolution
+          path: evidence/
+          retention-days: 30
