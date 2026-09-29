@@ -40,10 +40,12 @@ def _sha256(value):
 
 
 class DurableState:
-    """Encrypted SQLite-backed state for TikTok OAuth/session recovery.
+    """DurableState factory plus SQLite test/development backend.
 
-    The cookie/session ID and OAuth state values are never persisted in plaintext.
-    Session payloads (including tokens) are encrypted with Fernet/MultiFernet.
+    Direct construction remains the SQLite backend for tests and development.
+    Production selection must go through from_env(), which requires PostgreSQL
+    and never silently falls back to SQLite.
+    Sensitive session/OAuth payloads are encrypted with Fernet/MultiFernet.
     """
 
     def __init__(self, db_path, encryption_keys):
@@ -75,7 +77,30 @@ class DurableState:
         if not raw_keys:
             raw_keys = os.environ.get("TIKTOK_STATE_ENCRYPTION_KEY", "").strip()
         keys = [k.strip() for k in raw_keys.split(",") if k.strip()]
-        return cls(os.environ.get("TIKTOK_STATE_DB_PATH", ""), keys)
+
+        backend = os.environ.get("TIKTOK_STATE_BACKEND", "sqlite").strip().lower()
+        runtime_mode = os.environ.get("TIKTOK_RUNTIME_MODE", "development").strip().lower()
+        production = runtime_mode in ("production", "prod")
+
+        if production and backend not in ("postgres", "postgresql"):
+            raise DurableStateError(
+                "production requires TIKTOK_STATE_BACKEND=postgresql"
+            )
+
+        if backend == "sqlite":
+            return cls(os.environ.get("TIKTOK_STATE_DB_PATH", ""), keys)
+
+        if backend in ("postgres", "postgresql"):
+            try:
+                from postgres_state import PostgresDurableState
+            except Exception as exc:
+                raise DurableStateError("PostgreSQL backend could not be loaded") from exc
+            return PostgresDurableState(
+                os.environ.get("TIKTOK_POSTGRES_URL", ""),
+                keys,
+            )
+
+        raise DurableStateError("unsupported TIKTOK_STATE_BACKEND")
 
     def _connect(self):
         con = sqlite3.connect(str(self._db_path), timeout=10, isolation_level=None)
@@ -691,6 +716,18 @@ class DurableState:
 
     @classmethod
     def restore_backup(cls, backup_path, target_path, encryption_keys):
+        backend = os.environ.get("TIKTOK_STATE_BACKEND", "sqlite").strip().lower()
+        if cls is DurableState and backend in ("postgres", "postgresql"):
+            try:
+                from postgres_state import PostgresDurableState
+            except Exception as exc:
+                raise DurableStateError("PostgreSQL backend could not be loaded") from exc
+            return PostgresDurableState.restore_backup(
+                backup_path,
+                target_path,
+                encryption_keys,
+            )
+
         source_path = Path(str(backup_path or "")).expanduser()
         target_path = Path(str(target_path or "")).expanduser()
         if not source_path.is_absolute() or not target_path.is_absolute():
