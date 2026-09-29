@@ -16,17 +16,40 @@ Isolated TikTok OAuth / upload / Direct Post service for Trend Radar / TrendHunt
 
 ## Production persistence
 
-The code supports durable SQLite state through `TIKTOK_STATE_DB_PATH`, but production persistence is NOT established merely by configuring a local filesystem path.
+The DurableState semantics are preserved behind two backends:
 
-Production admission requires independent evidence that:
-- the deployed hardened target uses a genuinely persistent state backend/volume;
-- the encryption keys are recoverable by the owner;
-- backups leave the runtime instance and have a defined destination;
-- restore has been exercised against the deployed architecture;
-- recovery does not re-open duplicate publishing.
+- `SQLite` — test/development only.
+- `PostgreSQL` — required production backend.
 
-Until those conditions are independently proven:
-`PRODUCTION PERSISTENCE = NOT VERIFIED`.
+Production selection is explicit and fail-closed:
+
+```text
+TIKTOK_RUNTIME_MODE=production
+TIKTOK_STATE_BACKEND=postgresql
+TIKTOK_POSTGRES_URL=<TikTok-dedicated PostgreSQL URL>
+```
+
+If production selects SQLite, PostgreSQL is unavailable, the PostgreSQL URL is missing/invalid, or the driver cannot load, durable state initialization fails. There is **no silent fallback to SQLite**.
+
+Sensitive session/OAuth/recovery-marker payloads remain encrypted with:
+
+- `TIKTOK_STATE_ENCRYPTION_KEY`
+- or `TIKTOK_STATE_ENCRYPTION_KEYS`
+
+The PostgreSQL backend preserves:
+
+- persistent unique idempotency;
+- transactional publication admission;
+- atomic state transitions;
+- cross-instance concurrency safety;
+- provider publication ID uniqueness;
+- UNKNOWN-state safety;
+- persistent hard limits and mutation events;
+- durable audit continuity;
+- encrypted logical backup / isolated restore;
+- duplicate prevention after restart, redelivery, and restore.
+
+PostgreSQL code-level support does not itself establish production admission. Final R5 still requires independently verified production persistence, backup/restore, external alert delivery, cold takeover, and final architecture acceptance.
 
 ## Python / dependencies
 
@@ -43,7 +66,7 @@ python -m pip install --require-hashes -r tiktok_oauth_service/requirements.lock
 
 `requirements.txt` is a readable version-pin list; `requirements.lock` is the hash-locked installation authority used by CI.
 
-The runtime media validator depends on PyAV/FFmpeg through the pinned `av` wheel.
+The runtime media validator depends on PyAV/FFmpeg through the pinned `av` wheel. The production state backend uses hash-locked Psycopg 3 packages.
 
 ## Test command
 
@@ -55,7 +78,8 @@ python -m unittest -v \
   test_recovery.py \
   test_reconciliation.py \
   test_media_validation.py \
-  test_atomicity.py
+  test_atomicity.py \
+  test_backend_selection.py
 ```
 
 ## Runtime start
@@ -71,7 +95,10 @@ python tiktok_oauth_service/app.py
 - `TIKTOK_REDIRECT_URI`
 - `TIKTOK_SCOPES`
 - `PUBLIC_BASE_URL`
-- `TIKTOK_STATE_DB_PATH`
+- `TIKTOK_RUNTIME_MODE`
+- `TIKTOK_STATE_BACKEND`
+- `TIKTOK_STATE_DB_PATH` — SQLite test/dev only
+- `TIKTOK_POSTGRES_URL` — PostgreSQL production backend
 - `TIKTOK_STATE_ENCRYPTION_KEY` or `TIKTOK_STATE_ENCRYPTION_KEYS`
 - `TIKTOK_MUTATIONS_ENABLED`
 - `TIKTOK_KILL_SWITCH`
