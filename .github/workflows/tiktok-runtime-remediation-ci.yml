@@ -6,6 +6,7 @@ on:
       - tiktok-runtime-reliability-remediation-20260928
       - tiktok-production-admission-prep-20260929
       - tiktok-production-prequal-r4-remediation-20260929
+      - tiktok-production-prequal-r4-2-remediation-20260929
   workflow_dispatch:
 
 permissions:
