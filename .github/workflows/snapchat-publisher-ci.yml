@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   verify:
@@ -51,14 +51,22 @@ jobs:
           set -euo pipefail
           python -m pip install --upgrade pip
           python -m pip install uv
-          uv pip compile --generate-hashes --output-file=/tmp/snapchat-publisher.lock snapchat_publisher_service/requirements.in
-          uv pip compile --generate-hashes --output-file=/tmp/snapchat-oauth.lock snapchat_oauth_service/requirements.in
-          echo "===SNAPCHAT_PUBLISHER_LOCK_BEGIN==="
-          cat /tmp/snapchat-publisher.lock
-          echo "===SNAPCHAT_PUBLISHER_LOCK_END==="
-          echo "===SNAPCHAT_OAUTH_LOCK_BEGIN==="
-          cat /tmp/snapchat-oauth.lock
-          echo "===SNAPCHAT_OAUTH_LOCK_END==="
+          uv pip compile --generate-hashes --output-file=snapchat_publisher_service/requirements.txt snapchat_publisher_service/requirements.in
+          uv pip compile --generate-hashes --output-file=snapchat_oauth_service/requirements.txt snapchat_oauth_service/requirements.in
+
+      - name: Commit generated hash locks once
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- snapchat_publisher_service/requirements.txt snapchat_oauth_service/requirements.txt; then
+            echo "Hash locks already current."
+          else
+            git config user.name "trendradar-lock-bot"
+            git config user.email "trendradarar@gmail.com"
+            git add snapchat_publisher_service/requirements.txt snapchat_oauth_service/requirements.txt
+            git commit -m "snapchat: lock transitive dependencies with hashes"
+            git push origin HEAD:snapchat-production-remediation-20260928
+          fi
 
       - name: Install Snapchat runtime dependencies
         run: |
