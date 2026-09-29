@@ -59,7 +59,7 @@ Status vocabulary:
 | 27 | Rate-Limit Handling | INDEPENDENT PASS | 429 -> UNKNOWN -> later terminal success independently reproduced. |
 | 28 | Hard Limits | INTERNAL PASS | Durable transactional account/global limits remain implemented. |
 | 29 | Maximum Blast Radius | INTERNAL PASS | Conservative per-account/global limits and active-operation caps remain configured in code. |
-| 30 | Monitoring | PARTIAL | `/ops/health` is independently proven to flag UNKNOWN/stale. R4 found a false-negative in the first external watchdog; post-R4 remediation now fail-closes on non-2xx, malformed schema, UNKNOWN>0 and stale>0, but independent retest and real external delivery remain NOT VERIFIED. |
+| 30 | Monitoring | PARTIAL | `/ops/health` is independently proven to flag UNKNOWN/stale. R4 found false-negatives; R4.1 confirmed the original cases fixed but found fractional counters could be coerced to zero. Post-R4.1 remediation accepts only real non-negative JSON integers and otherwise fails closed. Independent retest and real external delivery remain NOT VERIFIED. |
 | 31 | Audit Trail | PARTIAL | Durable audit and secret-field rejection exist; final production retention/availability still depends on persistent state. |
 | 32 | Kill Switch | INDEPENDENT PASS | Kill-switch regression independently passed. |
 | 33 | Read-Only / No-Publish Mode | PARTIAL | Fail-closed posture is implemented; production admission must prove deployed startup/no-publish behavior. |
@@ -87,9 +87,17 @@ Independent R4 pre-qualification:
 - Alert Watchdog Tooling = FAIL
 - Documentation Completeness = FAIL
 - Architecture Pre-Review = FAIL
+
+Independent R4.1 focused retest:
+- Exact Target = PASS
+- original R4 watchdog false-negatives = fixed
+- new fractional-count coercion finding = FAIL
+- Documentation Completeness = FAIL because it overstated count validation
+- Focused R3/R4 Regression = PASS
+- Architecture Pre-Review = FAIL
 - production/cold-recovery gates = NOT VERIFIED
 
-Post-R4 local remediation exists but is NOT independently closed yet.
+Post-R4.1 strict-integer remediation exists but is NOT independently closed yet.
 
 Therefore:
 
