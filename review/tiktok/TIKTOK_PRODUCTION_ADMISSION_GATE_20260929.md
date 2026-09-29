@@ -64,7 +64,7 @@ Internal preparation includes:
 - secret-free `/ops/health`;
 - signed webhook watchdog tooling.
 
-Independent R4 pre-qualification found the first watchdog version could miss UNKNOWN/stale conditions when source flags were inconsistent and could miss HTTP 404/429 responses. The post-R4 remediation now treats all non-2xx, malformed/incomplete health schema, UNKNOWN>0 and stale>0 as attention-required. This remediation is NOT independently closed yet.
+Independent R4 pre-qualification found the first watchdog version could miss UNKNOWN/stale conditions when source flags were inconsistent and could miss HTTP 404/429 responses. R4.1 independently confirmed those original cases were fixed, but found a narrower type-validation defect: fractional counters such as `0.5` and `-0.5` were coerced with `int(value)` and could become `0`. The post-R4.1 remediation now accepts only real non-negative JSON integers and rejects floats/fractions, numeric strings, booleans, negatives, missing counts, malformed schema, and every non-2xx response fail-closed. This remediation is NOT independently closed yet.
 
 Required external evidence:
 1. UNKNOWN/stale/degraded health causes alert;
@@ -132,6 +132,7 @@ until the owner explicitly authorizes that external/financial production-admissi
   - reads secret-free `/ops/health`
   - fail-closes on every non-2xx or malformed/incomplete health response
   - independently evaluates UNKNOWN and stale counts even if source flags are inconsistent
+  - accepts those counts only as actual non-negative JSON integers; floats/fractions and coercible strings are rejected
   - sends HMAC-SHA256 signed JSON to an HTTPS webhook
   - does not send OAuth tokens/secrets
   - remains pending independent post-R4 retest
