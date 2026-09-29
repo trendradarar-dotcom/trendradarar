@@ -1,12 +1,13 @@
 import os
 import tempfile
 import unittest
+from unittest import mock
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlsplit, urlunsplit
 
 from cryptography.fernet import Fernet
 
-from durable_state import DurableStateError
+from durable_state import DurableState, DurableStateError
 from postgres_state import PostgresDurableState
 
 try:
@@ -89,6 +90,19 @@ class PostgresDurableStateTests(unittest.TestCase):
         store.transition_publication(idem,"UPLOADED",now=now+6)
         store.transition_publication(idem,"PROCESSING",now=now+7)
         store.transition_publication(idem,"PUBLISHED",now=now+8)
+
+    def test_production_factory_selects_postgresql(self):
+        env = {
+            "TIKTOK_STATE_BACKEND": "postgresql",
+            "TIKTOK_RUNTIME_MODE": "production",
+            "TIKTOK_POSTGRES_URL": self.dsn,
+            "TIKTOK_STATE_ENCRYPTION_KEY": self.key,
+        }
+        with mock.patch.dict(os.environ, env, clear=False):
+            selected = DurableState.from_env()
+        health = selected.health()
+        self.assertEqual(health["backend"], "postgresql")
+        self.assertFalse(health["fallback"])
 
     def test_health_reports_postgresql_without_fallback(self):
         health = self.store.health()
