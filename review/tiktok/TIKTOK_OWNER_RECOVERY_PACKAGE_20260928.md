@@ -293,7 +293,7 @@ Prepared producer tooling:
   - consumes secret-free `/ops/health`;
   - independently treats every non-2xx response, malformed/incomplete health schema, UNKNOWN count > 0, stale nonterminal count > 0, source-degraded state, or unreachable health endpoint as attention-required;
   - sends an HMAC-SHA256 signed JSON alert to an HTTPS webhook;
-  - fails closed when required health fields/counts are missing or invalid;
+  - accepts health counters only when they are real non-negative JSON integers (`type == int`); floats/fractions, numeric strings, booleans, negatives, and missing counts fail closed;
   - does not include OAuth/client secrets in the alert payload.
 
 These tools are qualification aids only. They do not prove production persistence or external alert delivery until exercised independently against the deployed production architecture.
@@ -331,3 +331,23 @@ R4's local watchdog finding was:
 - incomplete 2xx health schema could be treated too optimistically.
 
 The post-R4 remediation branch changes the watchdog to make these conditions fail closed and adds direct adversarial tests. This document does NOT self-close R4-02 or R4-03; independent retest is still required.
+
+
+## 22. R4.1 independent retest result
+
+Independent R4.1 result:
+- Exact Target = PASS
+- R4-02 Alert Watchdog Tooling = FAIL
+- R4-03 Documentation Completeness = FAIL
+- Focused R3/R4 Regression = PASS
+- Architecture Pre-Review = FAIL
+- R3 remains PASS; F-01..F-05 remain closed
+- Final Production Auto-Publish = NOT VERIFIED / NOT AUTHORIZED
+
+The new R4.1 finding was narrower than the original R4 watchdog failures:
+- `unknown_count = 0.5` was coerced by `int(value)` to `0`;
+- `stale_nonterminal_count = 0.5` was coerced to `0`;
+- negative fractions such as `-0.5` were also truncated to `0`;
+- this permitted invalid fractional counters to avoid fail-closed handling.
+
+Post-R4.1 remediation removes numeric coercion. Health counters are accepted only when the parsed JSON value is an actual non-negative integer. This document does NOT self-close R4-02 or R4-03; focused independent retest is still required.
