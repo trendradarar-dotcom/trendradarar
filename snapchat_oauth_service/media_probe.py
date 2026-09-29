@@ -1,8 +1,10 @@
-from contextlib import suppress
-import subprocess  # nosec B404 -- fixed ffmpeg executable; shell is never invoked
+from pathlib import Path
+import subprocess  # nosec B404 -- fixed bundled ffmpeg executable; shell is never invoked
 from typing import Any, Dict
 
 import imageio_ffmpeg
+from imageio_ffmpeg._definitions import FNAME_PER_PLATFORM, get_platform
+from imageio_ffmpeg._parsing import parse_ffmpeg_header
 
 
 class MediaProbeError(RuntimeError):
@@ -12,15 +14,30 @@ class MediaProbeError(RuntimeError):
 FULL_STREAM_TIMEOUT_SECONDS = 180
 
 
-def _verify_full_video_stream(path: str) -> None:
-    """Decode the complete primary video stream and fail on any decode error."""
-    ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+def _bundled_ffmpeg_exe() -> str:
+    """Return only the ffmpeg binary shipped inside the pinned imageio-ffmpeg package."""
+    package_root = Path(imageio_ffmpeg.__file__).resolve().parent
+    filename = FNAME_PER_PLATFORM.get(get_platform())
+    if not filename:
+        raise MediaProbeError("bundled_ffmpeg_platform_unsupported")
+
+    binary = (package_root / "binaries" / filename).resolve()
+    binaries_root = (package_root / "binaries").resolve()
+    if binaries_root not in binary.parents or not binary.is_file():
+        raise MediaProbeError("bundled_ffmpeg_missing")
+    return str(binary)
+
+
+def _probe_full_video_stream(path: str) -> Dict[str, Any]:
+    """Decode the complete primary video stream and return metadata from the same run."""
+    ffmpeg = _bundled_ffmpeg_exe()
     command = [
         ffmpeg,
         "-nostdin",
         "-hide_banner",
         "-loglevel",
-        "error",
+        "info",
+        "-nostats",
         "-err_detect",
         "explode",
         "-xerror",
@@ -36,8 +53,8 @@ def _verify_full_video_stream(path: str) -> None:
         "-",
     ]
     try:
-        # The executable is obtained from the pinned imageio-ffmpeg package and
-        # the media path is passed as one argv element. shell=False is explicit.
+        # Fixed package-owned executable + argv list + shell=False. Neither
+        # IMAGEIO_FFMPEG_EXE nor PATH participates in executable selection.
         result = subprocess.run(  # nosec B603
             command,
             check=False,
@@ -46,49 +63,39 @@ def _verify_full_video_stream(path: str) -> None:
             stderr=subprocess.PIPE,
             timeout=FULL_STREAM_TIMEOUT_SECONDS,
         )
+    except subprocess.TimeoutExpired as exc:
+        raise MediaProbeError("video_full_stream_probe_timeout") from exc
     except (OSError, subprocess.SubprocessError) as exc:
         raise MediaProbeError("video_full_stream_probe_failed") from exc
 
+    diagnostic = result.stderr.decode("utf-8", errors="replace")
     if result.returncode != 0:
         raise MediaProbeError("video_full_stream_corrupt")
 
+    try:
+        meta = parse_ffmpeg_header(diagnostic)
+    except Exception as exc:
+        raise MediaProbeError("video_metadata_parse_failed") from exc
+
+    size = meta.get("size") or meta.get("source_size") or (0, 0)
+    width = int(size[0] or 0)
+    height = int(size[1] or 0)
+    duration = float(meta.get("duration") or 0.0)
+    codec = str(meta.get("codec") or "")
+    if width <= 0 or height <= 0 or duration <= 0:
+        raise MediaProbeError("video_metadata_incomplete")
+
+    return {
+        "width": width,
+        "height": height,
+        "duration_seconds": duration,
+        "codec": codec,
+    }
+
 
 def probe_video(path: str) -> Dict[str, Any]:
-    """Measure metadata and decode the complete video stream before accepting it."""
-    reader = None
-    try:
-        # imageio-ffmpeg parses stream metadata from ffmpeg's diagnostic output.
-        # Do not force "-v error" here because that suppresses the metadata
-        # needed to determine duration and frame size.
-        reader = imageio_ffmpeg.read_frames(path, pix_fmt="rgb24")
-        meta = next(reader)
-        size = meta.get("size") or (0, 0)
-        width = int(size[0] or 0)
-        height = int(size[1] or 0)
-        duration = float(meta.get("duration") or 0.0)
-        codec = str(meta.get("codec") or "")
-        if width <= 0 or height <= 0 or duration <= 0:
-            raise MediaProbeError("video_metadata_incomplete")
-
-        # Metadata at the beginning of a container is not sufficient. A file can
-        # begin normally and become corrupt later. Force ffmpeg to decode the
-        # primary video stream through EOF before returning a successful probe.
-        _verify_full_video_stream(path)
-
-        return {
-            "width": width,
-            "height": height,
-            "duration_seconds": duration,
-            "codec": codec,
-        }
-    except (StopIteration, ValueError, OSError, RuntimeError) as exc:
-        if isinstance(exc, MediaProbeError):
-            raise
-        raise MediaProbeError("video_probe_failed") from exc
-    finally:
-        if reader is not None:
-            with suppress(Exception):
-                reader.close()
+    """Measure server-side metadata while decoding the complete stream through EOF."""
+    return _probe_full_video_stream(path)
 
 
 def validate_spotlight_media(meta: Dict[str, Any]) -> list[str]:
