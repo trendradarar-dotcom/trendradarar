@@ -1,0 +1,181 @@
+name: TikTok R5 PostgreSQL Directed Retest Package
+
+on:
+  push:
+    branches:
+      - tiktok-r5-postgres-backend-remediation-20260929
+    paths:
+      - .github/workflows/tiktok-r5-postgres-directed-retest-package.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-r5-postgres-package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact frozen PostgreSQL candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: d98ee71e110118dc9fff4710dca6bf61381eeefc
+          path: candidate_repo
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout reviewer handoff instructions
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ec7aa9ad0cc7e5e6c19d088dcbf69518103be795
+          path: handoff_repo
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Build exact-target-bound package
+        shell: bash
+        run: |
+          set -euo pipefail
+          PACKAGE="TrendRadar-TikTok-R5-PostgreSQL-Directed-Retest-20260929-d98ee71e"
+          mkdir -p "$PACKAGE/exact_target" "$PACKAGE/candidate" "$PACKAGE/producer_evidence"
+
+          cd candidate_repo
+          ACTUAL_COMMIT="$(git rev-parse HEAD)"
+          ACTUAL_TREE="$(git rev-parse 'HEAD^{tree}')"
+          test "$ACTUAL_COMMIT" = "d98ee71e110118dc9fff4710dca6bf61381eeefc"
+          test "$ACTUAL_TREE" = "4e1f7a6240b15f6c7d80a994efe0331e0dfce912"
+
+          git bundle create "../$PACKAGE/exact_target/TikTok-R5-Postgres-Exact-Target-d98ee71e.bundle" HEAD
+          git archive --format=tar --output="../$PACKAGE/exact_target/full-repository-snapshot.tar" HEAD
+          git archive --format=tar HEAD | tar -x -C "../$PACKAGE/candidate"
+          git ls-tree -r --full-tree HEAD > "../$PACKAGE/exact_target/FULL_TREE_LS.txt"
+
+          python tools/generate_tiktok_sbom.py             --commit "$ACTUAL_COMMIT"             --output "../$PACKAGE/exact_target/TIKTOK_SBOM_R5_POSTGRES.cdx.json"
+
+          {
+            echo "EXACT_COMMIT=$ACTUAL_COMMIT"
+            echo "EXACT_TREE=$ACTUAL_TREE"
+            git show --no-patch --format='COMMIT=%H%nTREE=%T%nPARENTS=%P%nAUTHOR_DATE=%aI%nCOMMITTER_DATE=%cI%nSUBJECT=%s' HEAD
+          } > "../$PACKAGE/exact_target/GIT_SHOW_COMMIT_TREE.txt"
+          cd ..
+
+          cp handoff_repo/review/tiktok/TIKTOK_R5_POSTGRES_INDEPENDENT_DIRECTED_RETEST_REQUEST_20260929.md "$PACKAGE/INDEPENDENT_REVIEW_README.md"
+          cp handoff_repo/review/tiktok/TIKTOK_R5_POSTGRES_REVIEWER_ACTIONS_AR_20260929.md "$PACKAGE/REVIEWER_ACTIONS_AR.md"
+          cp handoff_repo/review/tiktok/TIKTOK_R5_POSTGRES_EXACT_TARGET_REOPEN_20260929.md "$PACKAGE/EXACT_TARGET_REOPEN_INSTRUCTIONS.md"
+          cp candidate_repo/review/tiktok/TIKTOK_R5_POSTGRES_DURABLE_STATE_ARCHITECTURE_20260929.md "$PACKAGE/POSTGRES_ARCHITECTURE.md"
+          cp candidate_repo/review/tiktok/TIKTOK_R4_2_INDEPENDENT_CLOSURE_RECORD_20260929.md "$PACKAGE/R4_2_CLOSURE_ANCHOR.md"
+
+          cat > "$PACKAGE/EXACT_TARGET.txt" <<'EOF'
+          PROJECT=TrendHunter / Trend Radar
+          SCOPE=TikTok only
+          REPOSITORY=trendradarar-dotcom/trendradarar
+          FROZEN_REVIEW_BRANCH=tiktok-r5-postgres-independent-retest-candidate-20260929
+          EXACT_COMMIT=d98ee71e110118dc9fff4710dca6bf61381eeefc
+          EXACT_TREE=4e1f7a6240b15f6c7d80a994efe0331e0dfce912
+          BASE_HELD_RUNTIME_COMMIT=ece8039623ee82176d756591af9495414a80d3d6
+          SQLITE=TEST_DEV_ONLY
+          POSTGRESQL=REQUIRED_FINAL_PRODUCTION_BACKEND
+          PRODUCTION_CUTOVER=HOLD
+          OLD_RESOURCE=PRESERVE
+          TIKTOK_AUDIT_APPROVED=false/unset
+          PUBLIC_AUTO_PUBLISH=NOT_AUTHORIZED
+          CANDIDATE_DEPLOYED=false
+          EOF
+
+          cat > "$PACKAGE/START_HERE.md" <<'EOF'
+          # START HERE — TikTok R5 PostgreSQL Directed Independent Retest
+
+          1. Verify MANIFEST_SHA256.txt.
+          2. Verify Git bundle and exact commit/tree.
+          3. Rebuild exact root tree from full-repository-snapshot.tar.
+          4. Stop Fail-Closed if Exact Target is not PASS.
+          5. Read INDEPENDENT_REVIEW_README.md in full.
+          6. Use a reviewer-controlled REAL PostgreSQL instance for PG behavior/concurrency tests.
+          7. Retest only PostgreSQL-affected persistence/state semantics plus focused no-regression.
+          8. Producer CI and producer_evidence are context only, not closure evidence.
+          9. Do not deploy, merge, cut over, change Render, use non-TikTok resources, Recall/Resubmit TikTok App Review, or enable public posting.
+          10. Even a full directed PASS does not authorize final production auto-publish.
+          EOF
+
+          cat > "$PACKAGE/producer_evidence/PRODUCER_EVIDENCE.md" <<'EOF'
+          # Producer evidence — NOT independent closure
+
+          New architecture:
+          - SQLite = test/dev only
+          - PostgreSQL = required production backend
+          - no silent production fallback to SQLite
+
+          Producer implementation includes:
+          - explicit DurableState backend/runtime selection
+          - encrypted sensitive state
+          - PostgreSQL transactional/row-lock semantics
+          - persistent idempotency and provider ID uniqueness
+          - cross-instance admission serialization via PostgreSQL advisory xact lock
+          - UNKNOWN restart safety
+          - encrypted logical backup / clean-target restore
+          - audit and duplicate barrier preservation
+
+          Producer CI:
+          - workflow run 36574007386 = SUCCESS on exact candidate
+          - prior direct code run 36573863501 = SUCCESS
+          - SQLite/R3/R4 focused suite = green
+          - real PostgreSQL 16 integration/concurrency suite = green
+
+          Held runtime remains ece8039623ee82176d756591af9495414a80d3d6.
+          This candidate is NOT deployed and production cutover remains HOLD.
+
+          Independently reproduce every material claim.
+          EOF
+
+          # Producer exact-target reproducibility self-check.
+          BUNDLE_ABS="$PWD/$PACKAGE/exact_target/TikTok-R5-Postgres-Exact-Target-d98ee71e.bundle"
+          SNAPSHOT_ABS="$PWD/$PACKAGE/exact_target/full-repository-snapshot.tar"
+          rm -rf /tmp/r5pg-bundle-verify /tmp/r5pg-bundle-clone /tmp/r5pg-snapshot
+          git init -q /tmp/r5pg-bundle-verify
+          git -C /tmp/r5pg-bundle-verify bundle verify "$BUNDLE_ABS"             > "$PACKAGE/producer_evidence/EXACT_TARGET_REPRODUCIBILITY_CHECK.txt" 2>&1
+          git clone -q "$BUNDLE_ABS" /tmp/r5pg-bundle-clone
+          {
+            echo "BUNDLE_HEAD=$(git -C /tmp/r5pg-bundle-clone rev-parse HEAD)"
+            echo "BUNDLE_TREE=$(git -C /tmp/r5pg-bundle-clone rev-parse 'HEAD^{tree}')"
+          } >> "$PACKAGE/producer_evidence/EXACT_TARGET_REPRODUCIBILITY_CHECK.txt"
+
+          mkdir -p /tmp/r5pg-snapshot
+          tar -xf "$SNAPSHOT_ABS" -C /tmp/r5pg-snapshot
+          git -C /tmp/r5pg-snapshot init -q
+          git -C /tmp/r5pg-snapshot config core.autocrlf false
+          git -C /tmp/r5pg-snapshot add -A
+          SNAPSHOT_TREE="$(git -C /tmp/r5pg-snapshot write-tree)"
+          echo "SNAPSHOT_TREE=$SNAPSHOT_TREE" >> "$PACKAGE/producer_evidence/EXACT_TARGET_REPRODUCIBILITY_CHECK.txt"
+
+          test "$(git -C /tmp/r5pg-bundle-clone rev-parse HEAD)" = "d98ee71e110118dc9fff4710dca6bf61381eeefc"
+          test "$(git -C /tmp/r5pg-bundle-clone rev-parse 'HEAD^{tree}')" = "4e1f7a6240b15f6c7d80a994efe0331e0dfce912"
+          test "$SNAPSHOT_TREE" = "4e1f7a6240b15f6c7d80a994efe0331e0dfce912"
+
+          python - <<'PY'
+          import json
+          p="TrendRadar-TikTok-R5-PostgreSQL-Directed-Retest-20260929-d98ee71e/exact_target/TIKTOK_SBOM_R5_POSTGRES.cdx.json"
+          data=json.load(open(p,encoding="utf-8"))
+          assert data["metadata"]["component"]["version"]=="d98ee71e110118dc9fff4710dca6bf61381eeefc"
+          names={c.get("name") for c in data["components"]}
+          assert "psycopg" in names
+          assert "psycopg-binary" in names
+          PY
+
+          (
+            cd "$PACKAGE"
+            find . -type f ! -name MANIFEST_SHA256.txt -print0 | sort -z | xargs -0 sha256sum > MANIFEST_SHA256.txt
+          )
+
+          zip -qr "$PACKAGE.zip" "$PACKAGE"
+          sha256sum "$PACKAGE.zip" > "$PACKAGE.zip.sha256"
+
+      - name: Upload PostgreSQL directed retest package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: TrendRadar-TikTok-R5-PostgreSQL-Directed-Retest-20260929-d98ee71e
+          path: |
+            TrendRadar-TikTok-R5-PostgreSQL-Directed-Retest-20260929-d98ee71e.zip
+            TrendRadar-TikTok-R5-PostgreSQL-Directed-Retest-20260929-d98ee71e.zip.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
