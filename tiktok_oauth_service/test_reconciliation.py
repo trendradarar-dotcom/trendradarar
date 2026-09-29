@@ -12,6 +12,8 @@ class ReconciliationTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.key = Fernet.generate_key().decode()
+        os.environ["TIKTOK_STATE_BACKEND"] = "sqlite"
+        os.environ["TIKTOK_RUNTIME_MODE"] = "test"
         os.environ["TIKTOK_STATE_DB_PATH"] = os.path.join(self.tmp.name, "state.sqlite3")
         os.environ["TIKTOK_STATE_ENCRYPTION_KEY"] = self.key
         app._STORE = None
@@ -31,7 +33,7 @@ class ReconciliationTests(unittest.TestCase):
         app.api_json_post = self.old_api
         app._STORE = None
         app._STORE_ERROR = ""
-        for k in ["TIKTOK_STATE_DB_PATH","TIKTOK_STATE_ENCRYPTION_KEY"]:
+        for k in ["TIKTOK_STATE_BACKEND","TIKTOK_RUNTIME_MODE","TIKTOK_STATE_DB_PATH","TIKTOK_STATE_ENCRYPTION_KEY"]:
             os.environ.pop(k, None)
         self.tmp.cleanup()
 
