@@ -4,3 +4,4 @@ cffi==2.1.1
 pycparser==3.0
 psycopg==3.3.6
 psycopg-binary==3.3.6
+typing-extensions==4.16.0
