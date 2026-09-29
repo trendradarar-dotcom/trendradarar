@@ -15,6 +15,8 @@ class RecoveryQualificationToolTests(unittest.TestCase):
         self.root = Path(__file__).resolve().parents[1]
         self.script = self.root / "tools" / "tiktok_recovery_qualification.py"
         self.env = dict(os.environ)
+        self.env["TIKTOK_STATE_BACKEND"] = "sqlite"
+        self.env["TIKTOK_RUNTIME_MODE"] = "test"
         self.env["TIKTOK_STATE_DB_PATH"] = str(Path(self.tmp.name) / "state.sqlite3")
         self.env["TIKTOK_STATE_ENCRYPTION_KEY"] = Fernet.generate_key().decode()
 
