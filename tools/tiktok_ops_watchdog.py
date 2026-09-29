@@ -49,15 +49,11 @@ def _json_request(url, method="GET", body=None, headers=None, timeout=15):
 
 
 def _nonnegative_int(value, field_name):
-    if isinstance(value, bool):
+    # Health counters must be real JSON integers, not values coercible to int.
+    # Reject bools, strings, floats (including 1.0), fractions, NaN/inf, etc.
+    if type(value) is not int or value < 0:
         raise WatchdogError(f"{field_name}_invalid")
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError) as exc:
-        raise WatchdogError(f"{field_name}_invalid") from exc
-    if parsed < 0:
-        raise WatchdogError(f"{field_name}_invalid")
-    return parsed
+    return value
 
 
 def fetch_health(url, timeout=15):
