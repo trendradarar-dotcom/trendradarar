@@ -98,13 +98,19 @@ def cmd_restore_verify(args):
     actual = _sha(marker["value"])
     if actual != args.expected_sha256.lower():
         raise DurableStateError("restored recovery marker hash mismatch")
+    backend = os.environ.get("TIKTOK_STATE_BACKEND", "sqlite").strip().lower()
+    restored_target = (
+        "postgresql-target"
+        if backend in ("postgres", "postgresql")
+        else str(Path(args.target).resolve())
+    )
     _emit({
         "ok": True,
         "action": "restore-verify",
         "marker_key": args.marker_key,
         "marker_sha256": actual,
         "restored_health": restored.health(),
-        "restored_path": str(Path(args.target).resolve()),
+        "restored_target": restored_target,
     })
 
 
@@ -142,7 +148,11 @@ def build_parser():
     p = sub.add_parser("restore-verify")
     p.add_argument("--marker-key", default=DEFAULT_MARKER_KEY)
     p.add_argument("--backup", required=True)
-    p.add_argument("--target", required=True)
+    p.add_argument(
+        "--target",
+        required=True,
+        help="SQLite absolute target path or PostgreSQL target URL; never logged for PostgreSQL",
+    )
     p.add_argument("--expected-sha256", required=True)
     p.set_defaults(func=cmd_restore_verify)
 
