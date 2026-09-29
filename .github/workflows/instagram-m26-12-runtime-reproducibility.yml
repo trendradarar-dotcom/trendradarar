@@ -121,8 +121,7 @@ jobs:
             sleep 1
           done
 
-          docker run --rm --network "$net"             -e INSTAGRAM_TEST_DATABASE_URL="postgresql://postgres:postgres@$pg:5432/trendradar_instagram_test"             "$image" sh -lc '
-              set -euo pipefail
+          docker run --rm --network "$net"             -e INSTAGRAM_TEST_DATABASE_URL="postgresql://postgres:postgres@$pg:5432/trendradar_instagram_test"             "$image" sh -ec '
               python -m py_compile instagram_oauth_service/app.py
               python -m py_compile instagram_oauth_service/publisher_runtime.py
               python -m py_compile instagram_oauth_service/refresh_cron.py
