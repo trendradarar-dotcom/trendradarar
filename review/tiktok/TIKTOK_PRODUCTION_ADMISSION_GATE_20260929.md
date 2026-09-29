@@ -29,11 +29,29 @@ Any existing non-TikTok database/store is OUT OF SCOPE and MUST NOT be reused fo
 
 ## Remaining blocking gates
 
+### G-PG-BACKEND — PostgreSQL production backend
+
+Required code-level evidence:
+1. explicit DurableState backend abstraction/factory;
+2. SQLite restricted to test/development;
+3. PostgreSQL required in production;
+4. missing/invalid/unavailable PostgreSQL fails closed;
+5. no silent fallback to SQLite;
+6. encrypted sensitive state preserved;
+7. idempotency/publication/audit/UNKNOWN semantics preserved;
+8. concurrency and atomicity proven on real PostgreSQL;
+9. backup/restore semantics preserved;
+10. new Exact Commit/Tree receives directed independent retest.
+
+Current state:
+`IMPLEMENTED INTERNALLY — INDEPENDENT RETEST REQUIRED`
+
+
 ### G-PERSIST — production-persistent state
 
 Required evidence:
 1. hardened exact candidate deployed to an explicitly authorized controlled environment;
-2. `TIKTOK_STATE_DB_PATH` points to a truly persistent backend/volume, not ephemeral instance filesystem;
+2. production state uses a TikTok-dedicated PostgreSQL backend selected with `TIKTOK_STATE_BACKEND=postgresql`;
 3. recovery marker written;
 4. process/service restart or replacement occurs;
 5. the same marker is independently verified after restart/replacement;
@@ -109,15 +127,15 @@ Current state:
 
 ## Financial / external infrastructure boundary
 
-The currently observed TikTok Render service is free and does not evidence a persistent TikTok state volume/database.
+The final R5 production storage architecture is PostgreSQL, not SQLite/Persistent Disk.
 
-No paid infrastructure is authorized by this document.
+The held old runtime/resource remains preserved until a successor PostgreSQL exact target is independently accepted and runtime-equivalence is proven.
+
 Do not:
-- attach a paid disk;
-- create a paid database;
-- upgrade Render plan;
-- deploy the hardened candidate;
-until the owner explicitly authorizes that external/financial production-admission step.
+- treat a Persistent Disk as final production state;
+- cut over to PostgreSQL before directed independent retest;
+- delete/replace the old resource before successor acceptance;
+- reuse any non-TikTok database, secret, or resource.
 
 ## Prepared qualification tools
 
