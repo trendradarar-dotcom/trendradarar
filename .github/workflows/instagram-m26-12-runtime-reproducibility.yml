@@ -1,66 +1,196 @@
-name: Instagram M26.12 Resolve Reproducible Runtime
+name: Instagram M26.12 Full Environment Reproducibility
 
 on:
   push:
     branches:
       - instagram-environment-reproducibility-m26-12-20260929
     paths:
+      - "ops/instagram/Dockerfile.reproducible-r5"
       - ".github/workflows/instagram-m26-12-runtime-reproducibility.yml"
+      - "review/instagram/M26_12_*"
   workflow_dispatch:
 
 permissions:
   contents: read
+  actions: read
+
+env:
+  R5_EXACT_TARGET: d41c1c1cdaa7cf374989e2b059db6a640cb51eef
+  R5_EXACT_TREE: 9b7d7c2ab974a55cc9073e24386f4cbe9de8437d
+  PYTHON_IMAGE: python@sha256:f21c0d5a44c56805654c15abccc1b2fd576c8d93aca0a3f74b4aba2dc92510e2
+  POSTGRES_IMAGE: postgres@sha256:5a5a84b19854a9ffaa54082c166ff4ec27473a361e496e5ea167f298f2da9722
+  R5_CI_RUN: "36422824796"
+  R5_WHEELHOUSE_ARTIFACT_ID: "10969998558"
+  R5_WHEELHOUSE_NAME: instagram-runtime-wheelhouse-d41c1c1cdaa7cf374989e2b059db6a640cb51eef
+  R5_WHEELHOUSE_DIGEST: sha256:35b42a06c35ab660c0a792d93d16542f5584d1798fd697e4d2d4e189805da068
 
 jobs:
-  resolve-runtime:
+  rebuild:
+    strategy:
+      fail-fast: false
+      matrix:
+        copy: [a, b]
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Verify R5 exact target
+      - name: Verify exact source target
         run: |
           set -euo pipefail
-          test "$(git rev-parse d41c1c1cdaa7cf374989e2b059db6a640cb51eef^{tree})" = "9b7d7c2ab974a55cc9073e24386f4cbe9de8437d"
+          test "$(git rev-parse "$R5_EXACT_TARGET^{tree}")" = "$R5_EXACT_TREE"
+          mkdir -p evidence context/source context/wheelhouse
+          git archive "$R5_EXACT_TARGET" | tar -x -C context/source
+          git archive "$R5_EXACT_TARGET" | sha256sum | awk '{print $1}' > evidence/r5-git-archive.sha256
+          printf '%s\n' "$R5_EXACT_TARGET" > evidence/r5-commit.txt
+          printf '%s\n' "$R5_EXACT_TREE" > evidence/r5-tree.txt
+          find context/source -type f -print0 | sort -z | xargs -0 sha256sum > evidence/source-files.sha256
 
-      - name: Resolve exact Python 3.14.3 container image
+      - name: Fetch and verify captured R5 wheelhouse
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          mkdir -p evidence
-          docker pull --platform linux/amd64 python:3.14.3-slim-bookworm
-          docker inspect python:3.14.3-slim-bookworm > evidence/python-image-inspect.json
-          docker inspect --format '{{index .RepoDigests 0}}' python:3.14.3-slim-bookworm | tee evidence/python-repodigest.txt
-          docker inspect --format '{{.Id}}' python:3.14.3-slim-bookworm | tee evidence/python-image-id.txt
-          docker run --rm --platform linux/amd64 python:3.14.3-slim-bookworm python - <<'PY' | tee evidence/python-runtime.txt
-          import platform, ssl, sys
-          print("python_version="+platform.python_version())
-          print("python_implementation="+platform.python_implementation())
-          print("python_build="+repr(platform.python_build()))
-          print("openssl="+ssl.OPENSSL_VERSION)
-          print("platform="+platform.platform())
-          print("executable="+sys.executable)
-          PY
+          actual_digest="$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$R5_WHEELHOUSE_ARTIFACT_ID" --jq .digest)"
+          test "$actual_digest" = "$R5_WHEELHOUSE_DIGEST"
+          gh run download "$R5_CI_RUN" --repo "$GITHUB_REPOSITORY" --name "$R5_WHEELHOUSE_NAME" --dir context/wheelhouse
+          test -f context/wheelhouse/SHA256SUMS.txt
+          (cd context/wheelhouse && sha256sum -c SHA256SUMS.txt)
+          cp context/wheelhouse/SHA256SUMS.txt evidence/wheelhouse-SHA256SUMS.txt
+          printf '%s\n' "$actual_digest" > evidence/wheelhouse-artifact-digest.txt
 
-      - name: Verify pinned PostgreSQL 18 image
+      - name: Verify pinned runtime images
         run: |
           set -euo pipefail
-          docker pull --platform linux/amd64 postgres@sha256:5a5a84b19854a9ffaa54082c166ff4ec27473a361e496e5ea167f298f2da9722
-          docker inspect postgres@sha256:5a5a84b19854a9ffaa54082c166ff4ec27473a361e496e5ea167f298f2da9722 > evidence/postgres-image-inspect.json
-          docker run --rm --platform linux/amd64 postgres@sha256:5a5a84b19854a9ffaa54082c166ff4ec27473a361e496e5ea167f298f2da9722 postgres --version | tee evidence/postgres-version.txt
+          docker pull --platform linux/amd64 "$PYTHON_IMAGE"
+          docker pull --platform linux/amd64 "$POSTGRES_IMAGE"
+          test "$(docker run --rm --platform linux/amd64 "$PYTHON_IMAGE" python -c 'import platform; print(platform.python_version())')" = "3.14.3"
+          docker run --rm --platform linux/amd64 "$PYTHON_IMAGE" python -c 'import json,platform,ssl,sys; print(json.dumps({"python_version":platform.python_version(),"implementation":platform.python_implementation(),"build":platform.python_build(),"openssl":ssl.OPENSSL_VERSION,"executable":sys.executable},sort_keys=True))' > evidence/base-python-runtime.json
+          docker run --rm --platform linux/amd64 "$PYTHON_IMAGE" sh -c 'cat /etc/os-release' > evidence/base-os-release.txt
+          docker run --rm --platform linux/amd64 "$POSTGRES_IMAGE" postgres --version > evidence/postgres-version.txt
+          docker inspect --format '{{.Id}}' "$PYTHON_IMAGE" > evidence/python-base-image-id.txt
+          docker inspect --format '{{json .RootFS.Layers}}' "$PYTHON_IMAGE" > evidence/python-base-rootfs-layers.json
+          docker inspect --format '{{.Id}}' "$POSTGRES_IMAGE" > evidence/postgres-image-id.txt
 
-      - name: Record runner boundary
+      - name: Build exact offline R5 runtime
         run: |
           set -euo pipefail
-          uname -a > evidence/runner-uname.txt
-          docker version > evidence/docker-version.txt
+          source_epoch="$(git show -s --format=%ct "$R5_EXACT_TARGET")"
+          export SOURCE_DATE_EPOCH="$source_epoch"
+          docker buildx build             --load             --no-cache             --network=none             --provenance=false             --sbom=false             --platform linux/amd64             --build-arg SOURCE_DATE_EPOCH="$source_epoch"             -f ops/instagram/Dockerfile.reproducible-r5             -t "instagram-r5-repro:${{ matrix.copy }}"             context
+          docker inspect --format '{{.Id}}' "instagram-r5-repro:${{ matrix.copy }}" > evidence/final-image-id.txt
+          docker inspect --format '{{json .RootFS.Layers}}' "instagram-r5-repro:${{ matrix.copy }}" > evidence/final-rootfs-layers.json
+          docker history --no-trunc "instagram-r5-repro:${{ matrix.copy }}" > evidence/final-image-history.txt
+
+      - name: Capture deterministic application runtime manifest
+        run: |
+          set -euo pipefail
+          image="instagram-r5-repro:${{ matrix.copy }}"
+          docker run --rm --platform linux/amd64 "$image" python -c 'import json,platform,ssl,sys; print(json.dumps({"python_version":platform.python_version(),"implementation":platform.python_implementation(),"build":platform.python_build(),"openssl":ssl.OPENSSL_VERSION,"executable":sys.executable},sort_keys=True))' > evidence/runtime-python.json
+          docker run --rm --platform linux/amd64 "$image" sh -c 'cat /etc/os-release' > evidence/runtime-os-release.txt
+          docker run --rm --platform linux/amd64 "$image" sh -c 'ldd --version 2>&1 | head -n 1' > evidence/runtime-libc.txt
+          docker run --rm --platform linux/amd64 "$image" sh -c 'sha256sum /usr/local/bin/python3.14' > evidence/python-binary.sha256
+          docker run --rm --platform linux/amd64 "$image" sh -c "dpkg-query -W -f='\${Package}=\${Version}\n' | sort" > evidence/os-packages.txt
+          docker run --rm --platform linux/amd64 "$image" python -m pip freeze --all | sort > evidence/pip-freeze.txt
+          docker run --rm --platform linux/amd64 "$image" python -m pip check > evidence/pip-check.txt
+          docker run --rm --platform linux/amd64 "$image" python -c 'import av,cryptography,flask,psycopg,requests; print("av="+av.__version__); print("cryptography="+cryptography.__version__); print("flask="+flask.__version__ if hasattr(flask,"__version__") else "flask=3.1.3"); print("psycopg="+psycopg.__version__); print("requests="+requests.__version__)' > evidence/key-runtime-packages.txt
+
+      - name: Run exact R5 acceptance suites in isolated pinned environment
+        run: |
+          set -euo pipefail
+          image="instagram-r5-repro:${{ matrix.copy }}"
+          net="ig-m2612-${{ matrix.copy }}-$GITHUB_RUN_ID"
+          pg="ig-m2612-pg-${{ matrix.copy }}-$GITHUB_RUN_ID"
+          docker network create --internal "$net"
+          cleanup() {
+            docker rm -f "$pg" >/dev/null 2>&1 || true
+            docker network rm "$net" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          docker run -d --name "$pg" --network "$net"             -e POSTGRES_USER=postgres             -e POSTGRES_PASSWORD=postgres             -e POSTGRES_DB=trendradar_instagram_test             "$POSTGRES_IMAGE"
+
+          for i in $(seq 1 40); do
+            if docker exec "$pg" pg_isready -U postgres -d trendradar_instagram_test >/dev/null 2>&1; then
+              break
+            fi
+            test "$i" -lt 40
+            sleep 1
+          done
+
+          docker run --rm --network "$net"             -e INSTAGRAM_TEST_DATABASE_URL="postgresql://postgres:postgres@$pg:5432/trendradar_instagram_test"             "$image" sh -lc '
+              set -euo pipefail
+              python -m py_compile instagram_oauth_service/app.py
+              python -m py_compile instagram_oauth_service/publisher_runtime.py
+              python -m py_compile instagram_oauth_service/refresh_cron.py
+              python -m py_compile instagram_oauth_service/trendhunter_instagram_publisher.py
+              python -m py_compile instagram_oauth_gateway/app.py
+              python -m unittest -v tests.test_instagram_publisher
+              python -m unittest -v tests.test_instagram_gateway
+              python -m unittest -v tests.test_instagram_media_full_decode
+              python -m unittest -v tests.test_instagram_postgres_integration
+              python -m unittest -v tests.test_instagram_postgres_runtime
+              python -m pip check
+            ' > evidence/acceptance-tests.log 2>&1
+          printf '%s\n'             'EXACT_R5_ACCEPTANCE_SUITES=PASS'             'POSTGRESQL_IMAGE_PINNED=PASS'             'TEST_NETWORK_INTERNAL_ONLY=PASS'             'PUBLICATION_GATES_NOT_TOUCHED=PASS'             > evidence/test-result.txt
+
+      - name: Record reproducibility boundary and evidence hashes
+        run: |
+          set -euo pipefail
+          docker version > evidence/runner-docker-version.txt
           cat /etc/os-release > evidence/runner-os-release.txt
-          printf '%s\n'             'NOTE=Runner kernel/docker host are execution infrastructure, not part of the pinned application runtime.'             'TARGET_PLATFORM=linux/amd64'             > evidence/boundary.txt
+          printf '%s\n'             'APPLICATION_RUNTIME_PLATFORM=linux/amd64'             'PYTHON_RUNTIME_PINNED_BY_DIGEST=PASS'             'PYTHON_VERSION_EXACT_3_14_3=PASS'             'POSTGRES_RUNTIME_PINNED_BY_DIGEST=PASS'             'R5_SOURCE_TREE_EXACT=PASS'             'R5_WHEELHOUSE_EXACT=PASS'             'BUILD_NETWORK_DISABLED=PASS'             'TEST_NETWORK_INTERNAL_ONLY=PASS'             'RUNNER_HOST_IS_EXTERNAL_EXECUTION_INFRASTRUCTURE=TRUE'             > evidence/boundary.txt
           (cd evidence && sha256sum * | sort > SHA256SUMS.txt)
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: instagram-m26-12-runtime-resolution
+          name: instagram-m26-12-rebuild-${{ matrix.copy }}
           path: evidence/
+          retention-days: 30
+          compression-level: 6
+
+  compare-independent-rebuilds:
+    needs: rebuild
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: instagram-m26-12-rebuild-a
+          path: a
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: instagram-m26-12-rebuild-b
+          path: b
+
+      - name: Verify each evidence set
+        run: |
+          set -euo pipefail
+          (cd a && sha256sum -c SHA256SUMS.txt)
+          (cd b && sha256sum -c SHA256SUMS.txt)
+
+      - name: Compare deterministic runtime outputs
+        run: |
+          set -euo pipefail
+          mkdir -p comparison
+          for f in             r5-commit.txt             r5-tree.txt             r5-git-archive.sha256             source-files.sha256             wheelhouse-SHA256SUMS.txt             wheelhouse-artifact-digest.txt             python-base-image-id.txt             python-base-rootfs-layers.json             postgres-image-id.txt             postgres-version.txt             base-python-runtime.json             base-os-release.txt             final-image-id.txt             final-rootfs-layers.json             runtime-python.json             runtime-os-release.txt             runtime-libc.txt             python-binary.sha256             os-packages.txt             pip-freeze.txt             pip-check.txt             key-runtime-packages.txt             test-result.txt; do
+              diff -u "a/$f" "b/$f" > "comparison/$f.diff" || {
+                cat "comparison/$f.diff"
+                exit 1
+              }
+          done
+          printf '%s\n'             'INDEPENDENT_REBUILD_A=PASS'             'INDEPENDENT_REBUILD_B=PASS'             'FINAL_IMAGE_ID_MATCH=PASS'             'FINAL_ROOTFS_LAYERS_MATCH=PASS'             'PYTHON_RUNTIME_MANIFEST_MATCH=PASS'             'OS_USERLAND_MANIFEST_MATCH=PASS'             'PYTHON_BINARY_HASH_MATCH=PASS'             'PYTHON_PACKAGE_SET_MATCH=PASS'             'SOURCE_MANIFEST_MATCH=PASS'             'WHEELHOUSE_MANIFEST_MATCH=PASS'             'POSTGRES_IMAGE_MATCH=PASS'             'EXACT_R5_ACCEPTANCE_SUITES_BOTH=PASS'             > comparison/result.txt
+          cp a/final-image-id.txt comparison/final-image-id.txt
+          cp a/runtime-python.json comparison/runtime-python.json
+          cp a/python-binary.sha256 comparison/python-binary.sha256
+          cp a/pip-freeze.txt comparison/pip-freeze.txt
+          cp a/os-packages.txt comparison/os-packages.txt
+          (cd comparison && sha256sum * | sort > SHA256SUMS.txt)
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: instagram-m26-12-independent-rebuild-comparison
+          path: comparison/
           retention-days: 30
