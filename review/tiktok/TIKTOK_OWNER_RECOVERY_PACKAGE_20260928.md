@@ -6,7 +6,7 @@ Repository: trendradarar-dotcom/trendradarar
 Verified live service branch before remediation: tiktok-oauth-service
 Verified live service commit before remediation: a421e755c31bf8e00a2cffc047db2c7d9e70bcbe
 Remediation branch: tiktok-runtime-reliability-remediation-20260928
-Status: POST-R3 / R4 PRE-QUALIFICATION REMEDIATION — NOT PRODUCTION AUTHORIZED
+Status: POST-R4.2 LOCAL PRE-QUALIFICATION PASS — PRODUCTION GATES STILL OPEN / NOT AUTHORIZED
 
 ## 1. Ownership map
 
@@ -351,3 +351,29 @@ The new R4.1 finding was narrower than the original R4 watchdog failures:
 - this permitted invalid fractional counters to avoid fail-closed handling.
 
 Post-R4.1 remediation removes numeric coercion. Health counters are accepted only when the parsed JSON value is an actual non-negative integer. This document does NOT self-close R4-02 or R4-03; focused independent retest is still required.
+
+
+## 23. R4.2 independent closure
+
+Independent R4.2 result:
+- Exact Target = PASS
+- R4-02 Alert Watchdog Tooling = PASS / CLOSED
+- R4-03 Documentation Completeness = PASS / CLOSED
+- Focused Regression = PASS
+- R3 remains PASS
+- F-01..F-05 remain CLOSED / PASS
+- Final Production Auto-Publish = NOT VERIFIED / NOT AUTHORIZED
+
+R4.2 independently verified strict JSON integer counter validation, prior R4/R4.1 fail-closed cases, HMAC, secret exclusion, no TikTok mutation, and documentation consistency.
+
+The remaining blockers are production-bound only:
+- production persistent state;
+- off-runtime backup + production restore;
+- real external alert delivery;
+- cold engineer / owner takeover;
+- Golden Recovery;
+- final independent architecture/security acceptance.
+
+See:
+- `review/tiktok/TIKTOK_R4_2_INDEPENDENT_CLOSURE_RECORD_20260929.md`
+- `review/tiktok/TIKTOK_R5_PRODUCTION_ADMISSION_EXECUTION_PLAN_20260929.md`
