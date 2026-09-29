@@ -86,6 +86,27 @@ jobs:
           docker inspect --format '{{json .RootFS.Layers}}' "instagram-r5-repro:${{ matrix.copy }}" > evidence/final-rootfs-layers.json
           docker history --no-trunc "instagram-r5-repro:${{ matrix.copy }}" > evidence/final-image-history.txt
 
+      - name: Export deterministic OCI image
+        run: |
+          set -euo pipefail
+          source_epoch="$(git show -s --format=%ct "$R5_EXACT_TARGET")"
+          export SOURCE_DATE_EPOCH="$source_epoch"
+          docker buildx build --no-cache --network=none --provenance=false --sbom=false --platform linux/amd64 --build-arg SOURCE_DATE_EPOCH="$source_epoch" --output "type=oci,dest=evidence/r5-runtime.oci.tar,rewrite-timestamp=true" -f ops/instagram/Dockerfile.reproducible-r5 context
+          sha256sum evidence/r5-runtime.oci.tar > evidence/r5-runtime.oci.tar.sha256
+          mkdir -p evidence/oci-layout
+          tar -xf evidence/r5-runtime.oci.tar -C evidence/oci-layout
+          python - <<'PY'
+          import json, pathlib
+          root=pathlib.Path("evidence/oci-layout")
+          idx=json.loads((root/"index.json").read_text())
+          manifest_digest=idx["manifests"][0]["digest"]
+          manifest_path=root/"blobs"/"sha256"/manifest_digest.split(":",1)[1]
+          manifest=json.loads(manifest_path.read_text())
+          out={"index_manifest_digest":manifest_digest,"config_digest":manifest["config"]["digest"],"layers":[x["digest"] for x in manifest["layers"]]}
+          pathlib.Path("evidence/oci-manifest-summary.json").write_text(json.dumps(out,sort_keys=True,indent=2)+"\n")
+          PY
+          rm -rf evidence/oci-layout
+
       - name: Capture deterministic application runtime manifest
         run: |
           set -euo pipefail
@@ -175,7 +196,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p comparison
-          for f in             r5-commit.txt             r5-tree.txt             r5-git-archive.sha256             source-files.sha256             wheelhouse-SHA256SUMS.txt             wheelhouse-artifact-digest.txt             python-base-image-id.txt             python-base-rootfs-layers.json             postgres-image-id.txt             postgres-version.txt             base-python-runtime.json             base-os-release.txt             final-image-id.txt             final-rootfs-layers.json             runtime-python.json             runtime-os-release.txt             runtime-libc.txt             python-binary.sha256             os-packages.txt             pip-freeze.txt             pip-check.txt             key-runtime-packages.txt             test-result.txt; do
+          for f in             r5-commit.txt             r5-tree.txt             r5-git-archive.sha256             source-files.sha256             wheelhouse-SHA256SUMS.txt             wheelhouse-artifact-digest.txt             python-base-image-id.txt             python-base-rootfs-layers.json             postgres-image-id.txt             postgres-version.txt             base-python-runtime.json             base-os-release.txt             r5-runtime.oci.tar.sha256             oci-manifest-summary.json             final-image-id.txt             final-rootfs-layers.json             runtime-python.json             runtime-os-release.txt             runtime-libc.txt             python-binary.sha256             os-packages.txt             pip-freeze.txt             pip-check.txt             key-runtime-packages.txt             test-result.txt; do
               diff -u "a/$f" "b/$f" > "comparison/$f.diff" || {
                 cat "comparison/$f.diff"
                 exit 1
