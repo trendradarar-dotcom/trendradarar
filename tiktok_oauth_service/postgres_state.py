@@ -88,10 +88,15 @@ class _PgCursorAdapter:
     def rowcount(self):
         return int(self._cursor.rowcount or 0)
 
+    @staticmethod
+    def _column_name(description):
+        name = getattr(description, "name", None)
+        return str(name) if name is not None else str(description[0])
+
     def _wrap(self, row):
         if row is None:
             return None
-        cols = [getattr(d, "name", d[0]) for d in (self._cursor.description or ())]
+        cols = [self._column_name(d) for d in (self._cursor.description or ())]
         return _HybridRow(cols, row)
 
     def fetchone(self):
@@ -99,7 +104,7 @@ class _PgCursorAdapter:
 
     def fetchall(self):
         rows = self._cursor.fetchall()
-        cols = [getattr(d, "name", d[0]) for d in (self._cursor.description or ())]
+        cols = [self._column_name(d) for d in (self._cursor.description or ())]
         return [_HybridRow(cols, row) for row in rows]
 
 
