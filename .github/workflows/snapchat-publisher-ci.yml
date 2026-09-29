@@ -66,7 +66,10 @@ jobs:
               if "--require-hashes" not in lock:
                   raise SystemExit(f"{lock_path}: missing --require-hashes")
               for requirement in direct:
-                  if requirement.lower() not in lock.lower():
+                  name_part, version = requirement.split("==", 1)
+                  base_name = name_part.split("[", 1)[0]
+                  normalized_pin = f"{base_name}=={version}".lower()
+                  if normalized_pin not in lock.lower():
                       raise SystemExit(f"{lock_path}: direct pin missing: {requirement}")
               stanzas = []
               current = []
