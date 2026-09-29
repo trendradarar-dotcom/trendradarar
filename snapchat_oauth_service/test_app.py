@@ -297,6 +297,35 @@ class DirectBridgeRemediationTests(unittest.TestCase):
 
 
 class StateStoreRecoveryTests(unittest.TestCase):
+    def _env(self, db_url, **overrides):
+        env = {
+            "SNAPCHAT_DIRECT_API_ENABLED": "true",
+            "SNAPCHAT_PUBLICATION_ENABLED": "false",
+            "SNAPCHAT_KILL_SWITCH": "true",
+            "SNAPCHAT_EMERGENCY_READ_ONLY": "true",
+            "SNAPCHAT_TARGET_ACCOUNT_VERIFIED": "false",
+            "SNAPCHAT_DURABLE_RECONCILIATION_READY": "false",
+            "SNAPCHAT_ALERTING_READY": "false",
+            "SNAPCHAT_PRODUCTION_ASSURANCE_READY": "false",
+            "SNAPCHAT_HARD_LIMITS_VERIFIED": "false",
+            "SNAPCHAT_CLIENT_ID": "client-id",
+            "SNAPCHAT_CLIENT_SECRET": "client-secret",
+            "SNAPCHAT_REDIRECT_URI": "https://example.test/auth/callback",
+            "SNAPCHAT_STATE_SECRET": "state-secret-for-tests",
+            "SNAPCHAT_TOKEN_ENCRYPTION_KEY": Fernet.generate_key().decode("ascii"),
+            "SNAPCHAT_PUBLIC_PROFILE_ID": "3f5d8925-0da7-4da6-9b87-d8aa326026a0",
+            "SNAPCHAT_EXPECTED_USERNAME": "trendradarar",
+            "SNAPCHAT_ORGANIZATION_ID": "0cf1ddf6-1ede-41af-bfd7-4d959ca89b1e",
+            "SNAPCHAT_OWNER_KEY": "owner-key",
+            "SNAPCHAT_DATABASE_URL": db_url,
+        }
+        env.update(overrides)
+        return env
+
+    def _sqlite_url(self):
+        url, _ = self._store()
+        return url
+
     def _store(self):
         handle = tempfile.NamedTemporaryFile(prefix="snap-state-recovery-", suffix=".sqlite3", delete=False)
         handle.close()
