@@ -46,7 +46,7 @@ Status vocabulary:
 | 14 | Idempotency | INDEPENDENT PASS | Duplicate/idempotency regressions independently passed. |
 | 15 | Duplicate Upload Prevention | INDEPENDENT PASS | Independently reproduced duplicate suppression. |
 | 16 | Duplicate Publish Prevention | INDEPENDENT PASS | Independently reproduced duplicate barrier/UNKNOWN safety semantics. |
-| 17 | Persistent Publication State | PARTIAL | Local durability/restart/restore behavior is proven; production-persistent backend/volume is NOT VERIFIED. |
+| 17 | Persistent Publication State | PARTIAL | PostgreSQL production backend is implemented internally with no SQLite production fallback; independent directed retest and later production runtime persistence evidence remain required. |
 | 18 | Retry Policy | INDEPENDENT PASS | Zero blind mutation retry policy and reconciliation behavior independently regressed. |
 | 19 | Timeout Handling | PARTIAL | UNKNOWN semantics are proven for ambiguous outcomes; final production/provider fault matrix remains. |
 | 20 | Fail-Closed | INDEPENDENT PASS | OAuth/session/media/scope/kill-switch and ambiguity gates have independent adversarial/regression evidence. |
@@ -60,13 +60,13 @@ Status vocabulary:
 | 28 | Hard Limits | INTERNAL PASS | Durable transactional account/global limits remain implemented. |
 | 29 | Maximum Blast Radius | INTERNAL PASS | Conservative per-account/global limits and active-operation caps remain configured in code. |
 | 30 | Monitoring | PARTIAL | `/ops/health` is independently proven to flag UNKNOWN/stale. R4 found false-negatives; R4.1 confirmed the original cases fixed but found fractional counters could be coerced to zero. Post-R4.1 remediation accepts only real non-negative JSON integers and otherwise fails closed. Independent retest and real external delivery remain NOT VERIFIED. |
-| 31 | Audit Trail | PARTIAL | Durable audit and secret-field rejection exist; final production retention/availability still depends on persistent state. |
+| 31 | Audit Trail | PARTIAL | PostgreSQL preserves durable audit continuity and encrypted backup/restore internally; independent retest and final production retention evidence remain required. |
 | 32 | Kill Switch | INDEPENDENT PASS | Kill-switch regression independently passed. |
 | 33 | Read-Only / No-Publish Mode | PARTIAL | Fail-closed posture is implemented; production admission must prove deployed startup/no-publish behavior. |
 | 34 | Secret Rotation / Revocation | PARTIAL | Token/key rotation mechanisms exist; owner operational drill remains. |
-| 35 | Restart / Crash Recovery | PARTIAL | Local restart/backup/UNKNOWN behavior works; production-bound restart/replacement drill is NOT VERIFIED. |
+| 35 | Restart / Crash Recovery | PARTIAL | SQLite and PostgreSQL code-level restart/UNKNOWN semantics are covered internally; production PostgreSQL restart/replacement drill is NOT VERIFIED. |
 | 36 | Remote/Local Reconciliation | INDEPENDENT PASS | 429/UNKNOWN/later completion and draft terminal mappings independently reproduced. |
-| 37 | Backup / Restore | PARTIAL | Local integrity-checked backup/restore works; off-instance production destination and production restore drill are NOT VERIFIED. |
+| 37 | Backup / Restore | PARTIAL | PostgreSQL encrypted logical backup/isolated restore preserves publication, audit and duplicate barriers internally; off-instance production destination and production restore drill remain NOT VERIFIED. |
 | 38 | Restore Does Not Duplicate Publishing | INDEPENDENT PASS | Backup/restore duplicate barrier regression independently passed. |
 | 39 | Supply Chain Review | INDEPENDENT PASS | R3 independently verified immutable Action SHAs, hash-locked dependencies and exact-commit SBOM binding. |
 | 40 | Golden Recovery Baseline | NOT VERIFIED | R3 is independently accepted for its review scope but is not yet the final production Golden Release. |
@@ -115,3 +115,31 @@ Therefore:
 8. complete cold-engineer handover/recovery;
 9. perform final independent architecture/security acceptance on the exact deployed target;
 10. only then reconsider public auto-publish authorization.
+
+
+## R5 PostgreSQL transition status
+
+Governing decision:
+- SQLite is not the final production backend.
+- PostgreSQL is required for final production.
+- current R5 logic/state semantics are preserved; no full rewrite.
+- production cutover is HOLD.
+- old resource is preserved.
+
+Internal implementation status:
+- explicit backend/runtime selection;
+- no production SQLite fallback;
+- Psycopg 3 hash-locked;
+- real PostgreSQL integration/concurrency CI;
+- encrypted state;
+- unique idempotency;
+- atomic admission/transitions;
+- provider publication ID uniqueness;
+- UNKNOWN safety;
+- encrypted logical backup/restore;
+- duplicate barrier and audit continuity after restore.
+
+This status is producer/internal evidence only.
+
+Next gate:
+`NEW EXACT COMMIT/TREE -> DIRECTED INDEPENDENT POSTGRES RETEST`
