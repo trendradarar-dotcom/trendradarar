@@ -64,7 +64,11 @@ Internal preparation includes:
 - secret-free `/ops/health`;
 - signed webhook watchdog tooling.
 
-Independent R4 pre-qualification found the first watchdog version could miss UNKNOWN/stale conditions when source flags were inconsistent and could miss HTTP 404/429 responses. R4.1 independently confirmed those original cases were fixed, but found a narrower type-validation defect: fractional counters such as `0.5` and `-0.5` were coerced with `int(value)` and could become `0`. The post-R4.1 remediation now accepts only real non-negative JSON integers and rejects floats/fractions, numeric strings, booleans, negatives, missing counts, malformed schema, and every non-2xx response fail-closed. This remediation is NOT independently closed yet.
+Independent R4 and R4.1 found watchdog fail-closed defects. R4.2 independently retested the strict-counter remediation and documentation and closed both:
+- R4-02 Alert Watchdog Tooling = PASS / CLOSED
+- R4-03 Documentation Completeness = PASS / CLOSED
+
+This closes the local watchdog/documentation findings only. Real external production alert delivery remains NOT VERIFIED.
 
 Required external evidence:
 1. UNKNOWN/stale/degraded health causes alert;
@@ -135,7 +139,7 @@ until the owner explicitly authorizes that external/financial production-admissi
   - accepts those counts only as actual non-negative JSON integers; floats/fractions and coercible strings are rejected
   - sends HMAC-SHA256 signed JSON to an HTTPS webhook
   - does not send OAuth tokens/secrets
-  - remains pending independent post-R4 retest
+  - local tooling behavior independently passed R4.2; real external production delivery remains pending
 
 These tools are producer preparation only. Their existence does not close production gates.
 
