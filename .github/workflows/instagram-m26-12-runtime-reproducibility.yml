@@ -80,6 +80,7 @@ jobs:
           set -euo pipefail
           source_epoch="$(git show -s --format=%ct "$R5_EXACT_TARGET")"
           export SOURCE_DATE_EPOCH="$source_epoch"
+          find context -exec touch -h -d "@$source_epoch" {} +
           docker buildx build             --load             --no-cache             --network=none             --provenance=false             --sbom=false             --platform linux/amd64             --build-arg SOURCE_DATE_EPOCH="$source_epoch"             -f ops/instagram/Dockerfile.reproducible-r5             -t "instagram-r5-repro:${{ matrix.copy }}"             context
           docker inspect --format '{{.Id}}' "instagram-r5-repro:${{ matrix.copy }}" > evidence/final-image-id.txt
           docker inspect --format '{{json .RootFS.Layers}}' "instagram-r5-repro:${{ matrix.copy }}" > evidence/final-rootfs-layers.json
