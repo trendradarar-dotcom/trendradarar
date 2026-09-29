@@ -7,6 +7,7 @@ on:
       - tiktok-production-admission-prep-20260929
       - tiktok-production-prequal-r4-remediation-20260929
       - tiktok-production-prequal-r4-2-remediation-20260929
+      - tiktok-r5-postgres-backend-remediation-20260929
   workflow_dispatch:
 
 permissions:
@@ -15,7 +16,21 @@ permissions:
 jobs:
   r1-durable-state:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: tiktok_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d tiktok_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
@@ -27,6 +42,7 @@ jobs:
         run: |
           python -m py_compile tiktok_oauth_service/app.py
           python -m py_compile tiktok_oauth_service/durable_state.py
+          python -m py_compile tiktok_oauth_service/postgres_state.py
           python -m py_compile tiktok_oauth_service/test_durable_state.py
           python -m py_compile tiktok_oauth_service/test_app_safety.py
           python -m py_compile tiktok_oauth_service/test_recovery.py
@@ -35,12 +51,19 @@ jobs:
           python -m py_compile tiktok_oauth_service/test_atomicity.py
           python -m py_compile tiktok_oauth_service/test_recovery_qualification.py
           python -m py_compile tiktok_oauth_service/test_ops_watchdog.py
+          python -m py_compile tiktok_oauth_service/test_backend_selection.py
+          python -m py_compile tiktok_oauth_service/test_postgres_state.py
           python -m py_compile tools/tiktok_recovery_qualification.py
           python -m py_compile tools/tiktok_ops_watchdog.py
           python -m py_compile tools/generate_tiktok_sbom.py
       - name: Durable state and safety-gate unit tests
         working-directory: tiktok_oauth_service
-        run: python -m unittest -v test_durable_state.py test_app_safety.py test_recovery.py test_reconciliation.py test_media_validation.py test_atomicity.py test_recovery_qualification.py test_ops_watchdog.py
+        run: python -m unittest -v test_durable_state.py test_app_safety.py test_recovery.py test_reconciliation.py test_media_validation.py test_atomicity.py test_recovery_qualification.py test_ops_watchdog.py test_backend_selection.py
+      - name: PostgreSQL DurableState integration and concurrency tests
+        working-directory: tiktok_oauth_service
+        env:
+          TIKTOK_TEST_POSTGRES_URL: postgresql://postgres:postgres@127.0.0.1:5432/tiktok_test
+        run: python -m unittest -v test_postgres_state.py
       - name: Generate exact-commit SBOM and verify immutable supply-chain refs
         run: |
           python tools/generate_tiktok_sbom.py --commit "$GITHUB_SHA" --output /tmp/tiktok-sbom.cdx.json
@@ -50,6 +73,8 @@ jobs:
           assert data["metadata"]["component"]["version"] == os.environ["GITHUB_SHA"].lower()
           assert data["components"]
           assert any(c.get("name")=="av" for c in data["components"])
+          assert any(c.get("name")=="psycopg" for c in data["components"])
+          assert any(c.get("name")=="psycopg-binary" for c in data["components"])
           assert all(
               c.get("hashes") or c.get("purl","").startswith("pkg:github/")
               for c in data["components"]
