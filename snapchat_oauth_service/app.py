@@ -40,6 +40,14 @@ JOB_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{8,160}$")
 SPOTLIGHT_ID_RE = re.compile(r"^[A-Za-z0-9_\-]{8,300}$")
 EXPECTED_USERNAME_DEFAULT = "trendradarar"
 
+# Non-bypassable production ceilings. Environment configuration may make
+# these stricter, but can never raise the approved blast radius.
+HARD_MAX_POSTS_PER_HOUR = 2
+HARD_MAX_POSTS_PER_DAY = 10
+HARD_MAX_CONCURRENT_PUBLISHES = 1
+HARD_MAX_ATTEMPTS_PER_PUBLICATION = 2
+HARD_MAX_RETRY_HORIZON_SECONDS = 1800
+
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = MAX_MEDIA_BYTES + (8 * 1024 * 1024)
 
@@ -54,7 +62,27 @@ def _env_bool(name: str, default: bool = False) -> bool:
     value = os.getenv(name)
     if value is None:
         return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise RuntimeError(f"{name}_invalid_boolean")
+
+
+def _health_bool(name: str, default: bool):
+    try:
+        return _env_bool(name, default)
+    except RuntimeError:
+        return "INVALID"
+
+
+def _gate_bool(name: str, default: bool, errors: list[str], error_code: str) -> bool:
+    try:
+        return _env_bool(name, default)
+    except RuntimeError:
+        errors.append(error_code)
+        return default
 
 
 def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
@@ -72,11 +100,30 @@ def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
 
 def _limits() -> dict:
     return {
-        "max_posts_per_hour": _env_int("SNAPCHAT_MAX_POSTS_PER_HOUR", 2, 1, 100),
-        "max_posts_per_day": _env_int("SNAPCHAT_MAX_POSTS_PER_DAY", 10, 1, 1000),
-        "max_concurrent_publishes": _env_int("SNAPCHAT_MAX_CONCURRENT_PUBLISHES", 1, 1, 10),
-        "max_attempts_per_publication": _env_int("SNAPCHAT_MAX_ATTEMPTS_PER_PUBLICATION", 2, 1, 10),
-        "retry_horizon_seconds": _env_int("SNAPCHAT_RETRY_HORIZON_SECONDS", 1800, 60, 86400),
+        "max_posts_per_hour": _env_int(
+            "SNAPCHAT_MAX_POSTS_PER_HOUR", HARD_MAX_POSTS_PER_HOUR, 1, HARD_MAX_POSTS_PER_HOUR
+        ),
+        "max_posts_per_day": _env_int(
+            "SNAPCHAT_MAX_POSTS_PER_DAY", HARD_MAX_POSTS_PER_DAY, 1, HARD_MAX_POSTS_PER_DAY
+        ),
+        "max_concurrent_publishes": _env_int(
+            "SNAPCHAT_MAX_CONCURRENT_PUBLISHES",
+            HARD_MAX_CONCURRENT_PUBLISHES,
+            1,
+            HARD_MAX_CONCURRENT_PUBLISHES,
+        ),
+        "max_attempts_per_publication": _env_int(
+            "SNAPCHAT_MAX_ATTEMPTS_PER_PUBLICATION",
+            HARD_MAX_ATTEMPTS_PER_PUBLICATION,
+            1,
+            HARD_MAX_ATTEMPTS_PER_PUBLICATION,
+        ),
+        "retry_horizon_seconds": _env_int(
+            "SNAPCHAT_RETRY_HORIZON_SECONDS",
+            HARD_MAX_RETRY_HORIZON_SECONDS,
+            60,
+            HARD_MAX_RETRY_HORIZON_SECONDS,
+        ),
     }
 
 
@@ -121,7 +168,15 @@ def _state_store_status() -> dict:
 
 
 def _direct_connection_gate():
-    if not _env_bool("SNAPCHAT_DIRECT_API_ENABLED", False):
+    try:
+        direct_api_enabled = _env_bool("SNAPCHAT_DIRECT_API_ENABLED", False)
+    except RuntimeError:
+        return jsonify({
+            "ok": False,
+            "error": "direct_api_configuration_invalid",
+            "external_side_effect": "BLOCKED",
+        }), 503
+    if not direct_api_enabled:
         return jsonify({
             "ok": False,
             "error": "direct_api_disabled",
@@ -132,22 +187,49 @@ def _direct_connection_gate():
 
 def _production_gate_errors() -> list[str]:
     errors = []
-    if not _env_bool("SNAPCHAT_PUBLICATION_ENABLED", False):
+    if not _gate_bool(
+        "SNAPCHAT_PUBLICATION_ENABLED", False, errors, "publication_gate_configuration_invalid"
+    ):
         errors.append("publication_gate_closed")
-    if _env_bool("SNAPCHAT_KILL_SWITCH", True):
+    if _gate_bool(
+        "SNAPCHAT_KILL_SWITCH", True, errors, "kill_switch_configuration_invalid"
+    ):
         errors.append("kill_switch_active")
-    if _env_bool("SNAPCHAT_EMERGENCY_READ_ONLY", True):
+    if _gate_bool(
+        "SNAPCHAT_EMERGENCY_READ_ONLY", True, errors, "emergency_read_only_configuration_invalid"
+    ):
         errors.append("emergency_read_only_active")
-    if not _env_bool("SNAPCHAT_TARGET_ACCOUNT_VERIFIED", False):
+    if not _gate_bool(
+        "SNAPCHAT_TARGET_ACCOUNT_VERIFIED", False, errors, "target_account_configuration_invalid"
+    ):
         errors.append("target_account_not_verified")
-    if not _env_bool("SNAPCHAT_DURABLE_RECONCILIATION_READY", False):
+    if not _gate_bool(
+        "SNAPCHAT_DURABLE_RECONCILIATION_READY",
+        False,
+        errors,
+        "durable_reconciliation_configuration_invalid",
+    ):
         errors.append("durable_reconciliation_not_ready")
-    if not _env_bool("SNAPCHAT_ALERTING_READY", False):
+    if not _gate_bool(
+        "SNAPCHAT_ALERTING_READY", False, errors, "alerting_configuration_invalid"
+    ):
         errors.append("alerting_not_ready")
-    if not _env_bool("SNAPCHAT_PRODUCTION_ASSURANCE_READY", False):
+    if not _gate_bool(
+        "SNAPCHAT_PRODUCTION_ASSURANCE_READY",
+        False,
+        errors,
+        "production_assurance_configuration_invalid",
+    ):
         errors.append("production_assurance_not_ready")
-    if not _env_bool("SNAPCHAT_HARD_LIMITS_VERIFIED", False):
+    if not _gate_bool(
+        "SNAPCHAT_HARD_LIMITS_VERIFIED", False, errors, "hard_limits_gate_configuration_invalid"
+    ):
         errors.append("hard_limits_not_verified")
+
+    try:
+        _limits()
+    except RuntimeError:
+        errors.append("hard_limits_configuration_invalid")
 
     state = _state_store_status()
     if not state["ready"]:
@@ -403,6 +485,13 @@ def _expected_username() -> str:
     return (os.getenv("SNAPCHAT_EXPECTED_USERNAME") or EXPECTED_USERNAME_DEFAULT).strip().lower()
 
 
+def _expected_organization_id() -> str:
+    value = (os.getenv("SNAPCHAT_ORGANIZATION_ID") or "").strip()
+    if not value:
+        raise RuntimeError("SNAPCHAT_ORGANIZATION_ID_not_configured")
+    return value
+
+
 def _extract_public_profile(payload: dict) -> dict:
     if not isinstance(payload, dict):
         raise RuntimeError("profile_payload_invalid")
@@ -430,15 +519,38 @@ def _verify_exact_profile_payload(payload: dict) -> dict:
     profile = _extract_public_profile(payload)
     actual_id = str(profile.get("id") or profile.get("profile_id") or "").strip()
     actual_username = str(profile.get("snap_user_name") or profile.get("username") or "").strip().lower()
+
+    organization = profile.get("organization")
+    if not isinstance(organization, dict):
+        organization = payload.get("organization")
+    if not isinstance(organization, dict):
+        organization = {}
+
+    actual_organization_id = str(
+        profile.get("organization_id")
+        or profile.get("organizationId")
+        or payload.get("organization_id")
+        or payload.get("organizationId")
+        or organization.get("id")
+        or organization.get("organization_id")
+        or ""
+    ).strip()
+
     expected_id = _expected_profile_id()
     expected_username = _expected_username()
+    expected_organization_id = _expected_organization_id()
     if actual_id != expected_id:
         raise RuntimeError("public_profile_id_mismatch")
     if actual_username != expected_username:
         raise RuntimeError("public_profile_username_mismatch")
+    if not actual_organization_id:
+        raise RuntimeError("public_profile_organization_id_missing")
+    if actual_organization_id != expected_organization_id:
+        raise RuntimeError("public_profile_organization_id_mismatch")
     return {
         "id": actual_id,
         "username": actual_username,
+        "organization_id": actual_organization_id,
         "display_name": profile.get("display_name"),
     }
 
@@ -662,10 +774,10 @@ def index():
         "service": "Trend Radar Snapchat Public Profile API bridge",
         "version": APP_VERSION,
         "scope": SCOPE,
-        "direct_api_enabled": _env_bool("SNAPCHAT_DIRECT_API_ENABLED", False),
-        "publication_enabled": _env_bool("SNAPCHAT_PUBLICATION_ENABLED", False),
-        "kill_switch": _env_bool("SNAPCHAT_KILL_SWITCH", True),
-        "emergency_read_only": _env_bool("SNAPCHAT_EMERGENCY_READ_ONLY", True),
+        "direct_api_enabled": _health_bool("SNAPCHAT_DIRECT_API_ENABLED", False),
+        "publication_enabled": _health_bool("SNAPCHAT_PUBLICATION_ENABLED", False),
+        "kill_switch": _health_bool("SNAPCHAT_KILL_SWITCH", True),
+        "emergency_read_only": _health_bool("SNAPCHAT_EMERGENCY_READ_ONLY", True),
         "durable_state_store": state["production_durable"] and state["ready"],
         "public_side_effect_default": "BLOCKED",
     })
@@ -688,17 +800,18 @@ def health():
             "state_secret": bool(os.getenv("SNAPCHAT_STATE_SECRET")),
             "token_encryption_key": bool(os.getenv("SNAPCHAT_TOKEN_ENCRYPTION_KEY")),
             "profile_id": bool(os.getenv("SNAPCHAT_PUBLIC_PROFILE_ID")),
+            "organization_id": bool(os.getenv("SNAPCHAT_ORGANIZATION_ID")),
             "expected_username": _expected_username(),
             "owner_key": bool(os.getenv("SNAPCHAT_OWNER_KEY")),
-            "direct_api_enabled": _env_bool("SNAPCHAT_DIRECT_API_ENABLED", False),
-            "publication_enabled": _env_bool("SNAPCHAT_PUBLICATION_ENABLED", False),
-            "kill_switch": _env_bool("SNAPCHAT_KILL_SWITCH", True),
-            "emergency_read_only": _env_bool("SNAPCHAT_EMERGENCY_READ_ONLY", True),
-            "target_account_verified": _env_bool("SNAPCHAT_TARGET_ACCOUNT_VERIFIED", False),
-            "durable_reconciliation_ready": _env_bool("SNAPCHAT_DURABLE_RECONCILIATION_READY", False),
-            "alerting_ready": _env_bool("SNAPCHAT_ALERTING_READY", False),
-            "production_assurance_ready": _env_bool("SNAPCHAT_PRODUCTION_ASSURANCE_READY", False),
-            "hard_limits_verified": _env_bool("SNAPCHAT_HARD_LIMITS_VERIFIED", False),
+            "direct_api_enabled": _health_bool("SNAPCHAT_DIRECT_API_ENABLED", False),
+            "publication_enabled": _health_bool("SNAPCHAT_PUBLICATION_ENABLED", False),
+            "kill_switch": _health_bool("SNAPCHAT_KILL_SWITCH", True),
+            "emergency_read_only": _health_bool("SNAPCHAT_EMERGENCY_READ_ONLY", True),
+            "target_account_verified": _health_bool("SNAPCHAT_TARGET_ACCOUNT_VERIFIED", False),
+            "durable_reconciliation_ready": _health_bool("SNAPCHAT_DURABLE_RECONCILIATION_READY", False),
+            "alerting_ready": _health_bool("SNAPCHAT_ALERTING_READY", False),
+            "production_assurance_ready": _health_bool("SNAPCHAT_PRODUCTION_ASSURANCE_READY", False),
+            "hard_limits_verified": _health_bool("SNAPCHAT_HARD_LIMITS_VERIFIED", False),
             "durable_store_ready": state["ready"],
             "durable_store_production": state["production_durable"],
             "oauth_connected": state["connected"],
@@ -725,6 +838,7 @@ def create_oauth_intent():
         "SNAPCHAT_STATE_SECRET",
         "SNAPCHAT_TOKEN_ENCRYPTION_KEY",
         "SNAPCHAT_PUBLIC_PROFILE_ID",
+        "SNAPCHAT_ORGANIZATION_ID",
     )
     if missing:
         return jsonify({"ok": False, "error": "missing_configuration", "missing": missing}), 503
