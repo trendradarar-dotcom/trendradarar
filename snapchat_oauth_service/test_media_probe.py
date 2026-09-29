@@ -5,7 +5,7 @@ import unittest
 
 import imageio_ffmpeg
 
-from media_probe import MediaProbeError, probe_video, validate_spotlight_media
+from media_probe import MediaProbeError, _bundled_ffmpeg_exe, probe_video, validate_spotlight_media
 
 
 class MediaProbeIntegrationTests(unittest.TestCase):
@@ -154,6 +154,25 @@ class MediaProbeIntegrationTests(unittest.TestCase):
 
         with self.assertRaises(MediaProbeError):
             probe_video(truncated)
+
+
+    def test_environment_cannot_override_runtime_ffmpeg_binary(self):
+        valid = self._generate_valid_mp4(duration=2)
+        previous = os.environ.get("IMAGEIO_FFMPEG_EXE")
+        os.environ["IMAGEIO_FFMPEG_EXE"] = "/bin/false"
+        try:
+            selected = _bundled_ffmpeg_exe()
+            self.assertNotEqual(selected, "/bin/false")
+            self.assertTrue(os.path.isfile(selected))
+            meta = probe_video(valid)
+            self.assertEqual(meta["width"], 270)
+            self.assertEqual(meta["height"], 480)
+            self.assertGreater(meta["duration_seconds"], 0)
+        finally:
+            if previous is None:
+                os.environ.pop("IMAGEIO_FFMPEG_EXE", None)
+            else:
+                os.environ["IMAGEIO_FFMPEG_EXE"] = previous
 
 
 if __name__ == "__main__":
