@@ -16,6 +16,7 @@ from pathlib import Path
 
 from cryptography.fernet import Fernet, InvalidToken
 import psycopg
+from psycopg import sql
 
 ROOT = Path(__file__).resolve().parents[2]
 SERVICE = ROOT / "instagram_oauth_service"
@@ -206,7 +207,7 @@ def probe_database_credential_rotation():
         with conn.cursor() as cur:
             cur.execute("SELECT 1")
             record("DB_OLD_CREDENTIAL_ACCEPTED_BEFORE_ROTATION", cur.fetchone()[0] == 1)
-            cur.execute("ALTER ROLE postgres PASSWORD %s", (new_password,))
+            cur.execute(sql.SQL("ALTER ROLE postgres PASSWORD {}").format(sql.Literal(new_password)))
         conn.commit()
 
     old_rejected = False
