@@ -257,3 +257,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# evidence-run-revision: self-verifying-package
