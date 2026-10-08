@@ -1,14 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><loc>https://trendradar.com.co/</loc></url>
-  <url><loc>https://trendradar.com.co/privacy.html</loc></url>
-  <url><loc>https://trendradar.com.co/terms.html</loc></url>
-  <url><loc>https://trendradar.com.co/radar/ar/youtube</loc></url>
-  <url><loc>https://trendradar.com.co/archive/ar/youtube</loc></url>
-  <url><loc>https://trendradar.com.co/radar/ar/tiktok</loc></url>
-  <url><loc>https://trendradar.com.co/archive/ar/tiktok</loc></url>
-  <url><loc>https://trendradar.com.co/radar/ar/instagram</loc></url>
-  <url><loc>https://trendradar.com.co/archive/ar/instagram</loc></url>
-  <url><loc>https://trendradar.com.co/radar/ar/snapchat</loc></url>
-  <url><loc>https://trendradar.com.co/archive/ar/snapchat</loc></url>
+  <url><loc>https://trendradar.com.co/</loc><lastmod>2026-10-08</lastmod><changefreq>daily</changefreq><priority>1.0</priority></url>
+  <url><loc>https://trendradar.com.co/radar/ar/tiktok</loc><lastmod>2026-10-08</lastmod><changefreq>daily</changefreq><priority>0.9</priority></url>
+  <url><loc>https://trendradar.com.co/radar/ar/youtube</loc><lastmod>2026-10-08</lastmod><changefreq>daily</changefreq><priority>0.9</priority></url>
+  <url><loc>https://trendradar.com.co/privacy.html</loc><lastmod>2026-09-21</lastmod><changefreq>monthly</changefreq><priority>0.4</priority></url>
+  <url><loc>https://trendradar.com.co/terms.html</loc><lastmod>2026-09-21</lastmod><changefreq>monthly</changefreq><priority>0.4</priority></url>
 </urlset>
