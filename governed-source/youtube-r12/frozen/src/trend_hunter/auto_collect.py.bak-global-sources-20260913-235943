@@ -1,0 +1,62 @@
+from __future__ import annotations
+import argparse, logging, os, socket, time
+from pathlib import Path
+from urllib.error import HTTPError, URLError
+from .bootstrap import bootstrap_governance
+from .connectors.google_trends_live import DEFAULT_MARKETS, GoogleTrendsLiveConnector
+from .db import init_db
+from .ingest import IngestionService
+from .ledger import GovernanceLedger
+ROOT=Path(__file__).resolve().parents[2]
+DB=ROOT/'data'/'trend_hunter.db'
+LOG_DIR=Path(os.environ.get('LOCALAPPDATA',str(ROOT)))/'TrendHunter'; LOG_DIR.mkdir(parents=True,exist_ok=True)
+LOG_PATH=LOG_DIR/'auto_collector.log'; LOCK_PORT=39091
+
+def _logger():
+    log=logging.getLogger('trend_hunter.auto_collect')
+    if not log.handlers:
+        log.setLevel(logging.INFO); h=logging.FileHandler(LOG_PATH,encoding='utf-8'); h.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s')); log.addHandler(h)
+    return log
+
+def _lock():
+    s=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+    try: s.bind(('127.0.0.1',LOCK_PORT)); s.listen(1); return s
+    except OSError: s.close(); return None
+
+def _ingestion():
+    init_db(str(DB)); l=GovernanceLedger(str(DB)); bootstrap_governance(l); return IngestionService(l)
+
+def _collect(ing,market,log):
+    c=GoogleTrendsLiveConnector(market)
+    try:
+        items=c.fetch(); refs=ing.ingest(items,c.name); log.info('provider=google_trends transport=LIVE_RSS market=%s fetched=%d ingested=%d',market,len(items),len(refs)); return True,len(refs)
+    except HTTPError as e: log.warning('provider=google_trends market=%s http_status=%s operator_action_required=false',market,getattr(e,'code',None))
+    except URLError as e: log.warning('provider=google_trends market=%s network_error=%s operator_action_required=false',market,e)
+    except Exception: log.exception('provider=google_trends market=%s failure operator_action_required=false',market)
+    return False,0
+
+def collect_once(markets):
+    log=_logger(); ing=_ingestion(); ok=records=0
+    for m in markets:
+        good,n=_collect(ing,m,log); ok+=int(good); records+=n; time.sleep(.2)
+    return {'markets_requested':len(markets),'markets_ok':ok,'records_ingested':records}
+
+def run_forever(interval_seconds=90,batch_size=8):
+    log=_logger(); lk=_lock()
+    if lk is None: log.info('collector_already_running=true'); return
+    markets=list(DEFAULT_MARKETS); ing=_ingestion(); cursor=0
+    log.info('collector_started=true scope=GLOBAL_MULTI_MARKET markets=%d operator_action_required=false',len(markets))
+    try:
+        while True:
+            batch=[]
+            for _ in range(batch_size): batch.append(markets[cursor%len(markets)]); cursor+=1
+            for m in batch: _collect(ing,m,log); time.sleep(.2)
+            time.sleep(max(30,int(interval_seconds)))
+    finally: lk.close()
+
+def main():
+    p=argparse.ArgumentParser(); p.add_argument('--once',action='store_true'); p.add_argument('--markets',default=''); p.add_argument('--interval-seconds',type=int,default=90); p.add_argument('--batch-size',type=int,default=8); a=p.parse_args()
+    markets=[x.strip().upper() for x in a.markets.split(',') if x.strip()] or list(DEFAULT_MARKETS)
+    if a.once: print(collect_once(markets)); return 0
+    run_forever(max(30,a.interval_seconds),max(1,min(a.batch_size,len(DEFAULT_MARKETS)))); return 0
+if __name__=='__main__': raise SystemExit(main())
