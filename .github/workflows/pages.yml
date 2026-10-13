@@ -23,14 +23,85 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Assemble public-only Pages artifact (fail closed)
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import shutil
+          
+          destination = Path("_pages_public_artifact")
+          if destination.exists():
+              raise SystemExit("Public artifact destination already exists")
+          approved = (
+              "404.html",
+              "_headers",
+              "googleb6244da54ddc519a.html",
+              "index.html",
+              "privacy.html",
+              "robots.txt",
+              "site-manifest.json",
+              "sitemap.txt",
+              "sitemap.xml",
+              "terms.html",
+              "tiktokScwTdPhkDaEnTEnFU9zu7XQ7dLA4AVRR.txt",
+              "archive/ar/instagram/index.html",
+              "archive/ar/snapchat/index.html",
+              "archive/ar/tiktok/index.html",
+              "archive/ar/youtube/index.html",
+              "assets/brand/trend-radar-avatar.jpg",
+              "assets/site.css",
+              "connect/instagram/callback.html",
+              "connect/instagram/index.html",
+              "instagram-oauth/callback.html",
+              "instagram-oauth/complete.html",
+              "instagram-oauth/connect.html",
+              "instagram-oauth/index.html",
+              "instagram/connect/index.html",
+              "instagram/oauth/callback.html",
+              "radar/ar/instagram/index.html",
+              "radar/ar/snapchat/index.html",
+              "radar/ar/tiktok/index.html",
+              "radar/ar/youtube/index.html",
+          )
+          assert len(approved) == 29 and len(set(approved)) == len(approved)
+          approved_set = set(approved)
+          public_roots = ("archive", "assets", "connect", "instagram-oauth", "instagram", "radar")
+          for root_name in public_roots:
+              root = Path(root_name)
+              if not root.is_dir() or root.is_symlink():
+                  raise SystemExit(f"Missing or unsafe public root: {root_name}")
+              for entry in root.rglob("*"):
+                  relative = entry.as_posix()
+                  if entry.is_symlink():
+                      raise SystemExit(f"Symlink not authorized: {relative}")
+                  if entry.is_file() and relative not in approved_set:
+                      raise SystemExit(f"Unexpected public subtree file: {relative}")
+                  if not entry.is_file() and not entry.is_dir():
+                      raise SystemExit(f"Unsupported public subtree entry: {relative}")
+          destination.mkdir()
+          for name in approved:
+              source = Path(name)
+              if not source.is_file() or source.is_symlink():
+                  raise SystemExit(f"Missing or unsafe public file: {name}")
+              target = destination / name
+              target.parent.mkdir(parents=True, exist_ok=True)
+              shutil.copy2(source, target)
+          actual = {p.relative_to(destination).as_posix() for p in destination.rglob("*") if p.is_file()}
+          if actual != approved_set:
+              raise SystemExit("Public artifact inventory mismatch")
+          print(f"PUBLIC_ARTIFACT_VALIDATED={len(actual)} files")
+          PY
       - name: Configure Pages
         uses: actions/configure-pages@v5
         with:
           enablement: true
-      - name: Upload artifact
+      - name: Upload public-only artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: .
+          path: _pages_public_artifact
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
