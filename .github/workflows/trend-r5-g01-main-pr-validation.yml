@@ -2,8 +2,7 @@ name: Trend Radar Main PR Validation
 
 on:
   pull_request:
-    branches:
-      - main
+    branches: [main]
   merge_group:
 
 permissions:
@@ -18,32 +17,88 @@ jobs:
         uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Validate public surface without deployment
+      - name: Validate static surface without deployment
         shell: bash
         run: |
           python3 - <<'PY'
           import json
+          from html.parser import HTMLParser
           from pathlib import Path
-
-          required = (
-              "index.html",
-              "404.html",
-              "robots.txt",
-              "sitemap.xml",
-              "site-manifest.json",
-          )
-          missing = [name for name in required if not Path(name).is_file()]
-          if missing:
-              raise SystemExit("Missing static files: " + ", ".join(missing))
-
-          with open("site-manifest.json", encoding="utf-8") as stream:
-              manifest = json.load(stream)
-          if not isinstance(manifest, (dict, list)):
-              raise SystemExit("site-manifest.json has unexpected JSON root")
-
-          for name in ("index.html", "404.html"):
-              text = Path(name).read_text(encoding="utf-8")
-              if "<html" not in text.lower():
-                  raise SystemExit(name + " is missing an HTML root")
+          from urllib.parse import urlparse
+          import xml.etree.ElementTree as ET
+          
+          required = ("index.html", "404.html", "robots.txt", "sitemap.xml", "site-manifest.json")
+          for name in required:
+              file = Path(name)
+              if not file.is_file() or not file.read_bytes().strip():
+                  raise SystemExit(f"Required file missing or empty: {name}")
+          
+          manifest = json.loads(Path("site-manifest.json").read_text(encoding="utf-8"))
+          if not isinstance(manifest, dict) or manifest.get("schema") != "TREND_RADAR_PUBLIC_SURFACE_V2":
+              raise SystemExit("Invalid public surface manifest schema")
+          base = manifest.get("base_url")
+          if not isinstance(base, str) or urlparse(base).scheme != "https" or not urlparse(base).netloc:
+              raise SystemExit("Manifest base_url must be HTTPS")
+          if manifest.get("language") != "ar":
+              raise SystemExit("Invalid manifest language")
+          if not isinstance(manifest.get("brand"), dict) or not all(
+              isinstance(manifest["brand"].get(k), str) and manifest["brand"][k].strip()
+              for k in ("name", "arabic_name", "tagline_ar")
+          ):
+              raise SystemExit("Missing brand identity")
+          if manifest.get("active_public_surfaces") != ["tiktok", "youtube"]:
+              raise SystemExit("Unexpected Phase-1 public surfaces")
+          if manifest.get("reserved_surfaces") != ["instagram", "snapchat"]:
+              raise SystemExit("Unexpected Phase-2 reserved surfaces")
+          seo = manifest.get("seo")
+          if not isinstance(seo, dict) or seo.get("sitemap") != base.rstrip("/") + "/sitemap.xml":
+              raise SystemExit("Sitemap not bound to manifest base_url")
+          if manifest.get("production_publish_authority_changed") is not False:
+              raise SystemExit("Manifest publishing lock is not fail-closed")
+          for key in ("public_data_embedded", "private_test_content_embedded"):
+              if manifest.get(key) is not False:
+                  raise SystemExit(f"Manifest safety flag invalid: {key}")
+          
+          root = ET.parse("sitemap.xml").getroot()
+          ns = "{http://www.sitemaps.org/schemas/sitemap/0.9}"
+          if root.tag != ns + "urlset":
+              raise SystemExit("Sitemap root is not urlset")
+          locs = root.findall(f"{ns}url/{ns}loc")
+          if not locs or not all((n.text or "").strip().startswith(base.rstrip("/") + "/") for n in locs):
+              raise SystemExit("Sitemap URL locations missing or off-domain")
+          if (base.rstrip("/") + "/") not in [(n.text or "").strip() for n in locs]:
+              raise SystemExit("Homepage missing from sitemap")
+          
+          robots = Path("robots.txt").read_text(encoding="utf-8")
+          lines = [line.strip() for line in robots.splitlines() if line.strip() and not line.lstrip().startswith("#")]
+          if "User-agent: *" not in lines or "Allow: /" not in lines or f"Sitemap: {seo['sitemap']}" not in lines:
+              raise SystemExit("robots.txt missing required crawler/sitemap directives")
+          
+          class Structure(HTMLParser):
+              def __init__(self):
+                  super().__init__(convert_charrefs=True)
+                  self.stack = []
+                  self.seen = set()
+                  self.void = {"area", "base", "br", "col", "embed", "hr", "img",
+                               "input", "link", "meta", "param", "source", "track", "wbr"}
+              def handle_starttag(self, tag, attrs):
+                  if tag in ("html", "head", "body", "title"):
+                      self.seen.add(tag)
+                  if tag not in self.void:
+                      self.stack.append(tag)
+              def handle_endtag(self, tag):
+                  if tag in self.void:
+                      return
+                  if not self.stack or self.stack[-1] != tag:
+                      raise ValueError(f"Unbalanced HTML closing tag: {tag}")
+                  self.stack.pop()
+          
+          for filename in ("index.html", "404.html"):
+              html = Path(filename).read_text(encoding="utf-8")
+              parser = Structure()
+              parser.feed(html)
+              parser.close()
+              if parser.stack or not {"html", "head", "body", "title"}.issubset(parser.seen):
+                  raise SystemExit(f"{filename} has incomplete HTML structure")
           print("TREND_R5_STATIC_PR_CHECK=PASS")
           PY
