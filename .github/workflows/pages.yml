@@ -23,14 +23,56 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Assemble public-only Pages artifact (fail closed)
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import shutil
+
+          destination = Path("_pages_public_artifact")
+          destination.mkdir(exist_ok=False)
+          public_files = (
+              "404.html", "_headers", "googleb6244da54ddc519a.html",
+              "index.html", "privacy.html", "robots.txt",
+              "site-manifest.json", "sitemap.txt", "sitemap.xml",
+              "terms.html", "tiktokScwTdPhkDaEnTEnFU9zu7XQ7dLA4AVRR.txt",
+          )
+          public_dirs = (
+              "archive", "assets", "connect", "instagram-oauth",
+              "instagram", "radar",
+          )
+          for name in public_files + public_dirs:
+              source = Path(name)
+              if not source.exists() or source.is_symlink():
+                  raise SystemExit(f"Missing or unsafe public path: {name}")
+              if source.is_file():
+                  shutil.copy2(source, destination / name)
+              elif source.is_dir():
+                  if any(p.is_symlink() for p in source.rglob("*")):
+                      raise SystemExit(f"Public path contains symbolic links: {name}")
+                  shutil.copytree(source, destination / name)
+              else:
+                  raise SystemExit(f"Unsupported public path: {name}")
+          files = [p for p in destination.rglob("*") if p.is_file()]
+          if not files or not (destination / "index.html").is_file():
+              raise SystemExit("Public artifact empty or homepage missing")
+          forbidden = (".git", ".github", "governed-source", "src", "tests")
+          for path in destination.rglob("*"):
+              if any(part in forbidden for part in path.relative_to(destination).parts):
+                  raise SystemExit(f"Forbidden artifact content: {path}")
+          print(f"PUBLIC_ARTIFACT_VALIDATED={len(files)} files")
+          PY
       - name: Configure Pages
         uses: actions/configure-pages@v5
         with:
           enablement: true
-      - name: Upload artifact
+      - name: Upload public-only artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: .
+          path: _pages_public_artifact
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
