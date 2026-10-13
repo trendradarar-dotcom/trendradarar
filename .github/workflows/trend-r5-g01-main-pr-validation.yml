@@ -1,0 +1,49 @@
+name: Trend Radar Main PR Validation
+
+on:
+  pull_request:
+    branches:
+      - main
+  merge_group:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-public-surface:
+    name: validate-public-surface
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate public surface without deployment
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          required = (
+              "index.html",
+              "404.html",
+              "robots.txt",
+              "sitemap.xml",
+              "site-manifest.json",
+          )
+          missing = [name for name in required if not Path(name).is_file()]
+          if missing:
+              raise SystemExit("Missing static files: " + ", ".join(missing))
+
+          with open("site-manifest.json", encoding="utf-8") as stream:
+              manifest = json.load(stream)
+          if not isinstance(manifest, (dict, list)):
+              raise SystemExit("site-manifest.json has unexpected JSON root")
+
+          for name in ("index.html", "404.html"):
+              text = Path(name).read_text(encoding="utf-8")
+              if "<html" not in text.lower():
+                  raise SystemExit(name + " is missing an HTML root")
+          print("TREND_R5_STATIC_PR_CHECK=PASS")
+          PY
