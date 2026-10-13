@@ -1,0 +1,66 @@
+from __future__ import annotations
+
+import sqlite3
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Iterator
+import hashlib
+from datetime import datetime, timezone
+
+SCHEMA_PATH = Path(__file__).with_name("schema.sql")
+SCHEMA_VERSION = 3
+
+
+class ClosingConnection(sqlite3.Connection):
+    """SQLite connection whose context-manager exit also closes the handle.
+
+    sqlite3.Connection.__exit__ commits/rolls back but does not close. This
+    project consistently uses ``with connect(...) as conn`` as an ownership
+    boundary, so leaving the default behavior leaks file descriptors across
+    repeated operations/tests.
+    """
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        try:
+            return super().__exit__(exc_type, exc_value, traceback)
+        finally:
+            self.close()
+
+
+def connect(db_path: str) -> sqlite3.Connection:
+    conn = sqlite3.connect(db_path, factory=ClosingConnection)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA busy_timeout = 30000")
+    return conn
+
+
+def init_db(db_path: str) -> None:
+    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+    schema = SCHEMA_PATH.read_text(encoding="utf-8")
+    schema_hash = hashlib.sha256(schema.encode("utf-8")).hexdigest()
+    with connect(db_path) as conn:
+        conn.executescript(schema)
+        row = conn.execute("SELECT version,schema_hash FROM schema_migration WHERE version=?", (SCHEMA_VERSION,)).fetchone()
+        if row is None:
+            conn.execute(
+                "INSERT INTO schema_migration(version,name,applied_at,schema_hash) VALUES(?,?,?,?)",
+                (SCHEMA_VERSION, "operationalization_o1_1_enforcement_hardening", datetime.now(timezone.utc).isoformat(timespec="microseconds"), schema_hash),
+            )
+        elif row["schema_hash"] != schema_hash:
+            raise RuntimeError("Schema content changed without a new SCHEMA_VERSION migration")
+        conn.commit()
+
+
+@contextmanager
+def tx(db_path: str) -> Iterator[sqlite3.Connection]:
+    conn = connect(db_path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()

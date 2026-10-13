@@ -1,0 +1,54 @@
+from __future__ import annotations
+
+from typing import Any, Protocol
+
+from .ledger import GovernanceLedger, ArtifactRef, LedgerError
+
+
+from .publishing_target import normalize_publication_target
+class CreativeProvider(Protocol):
+    provider_key: str
+    def generate(self, brief: dict[str,Any]) -> dict[str,Any]: ...
+
+
+class ManualCreativeProvider:
+    provider_key='MANUAL_INPUT'
+    def __init__(self, content: dict[str,Any]): self.content=content
+    def generate(self, brief: dict[str,Any]) -> dict[str,Any]: return dict(self.content)
+
+
+class CreativeService:
+    def __init__(self,ledger:GovernanceLedger): self.ledger=ledger
+
+    def create(self, eligibility_state_id: str, monetization_configuration_state_id: str | None, *, target: dict[str,Any], brief: dict[str,Any], provider: CreativeProvider) -> ArtifactRef:
+        elig=self.ledger.get_state(eligibility_state_id)
+        if elig['state_type']!='ELIGIBILITY_ASSESSMENT': raise LedgerError('eligibility_state_id must be ELIGIBILITY_ASSESSMENT')
+        if elig['payload'].get('outcome')!='ELIGIBLE': raise LedgerError('creative generation forbidden unless eligibility outcome is ELIGIBLE')
+        invalidate=self.ledger.get_dependency_policy('MATERIAL_UPSTREAM_INVALIDATES',1)
+        upstream=[(eligibility_state_id,'CREATIVE_ELIGIBILITY_GATE')]
+        if monetization_configuration_state_id:
+            mon=self.ledger.get_state(monetization_configuration_state_id)
+            if mon['state_type']!='MONETIZATION_CONFIGURATION': raise LedgerError('invalid monetization configuration')
+            upstream.append((monetization_configuration_state_id,'CREATIVE_MONETIZATION_CONTEXT'))
+        target = normalize_publication_target(target)
+        content=provider.generate(brief)
+        if not isinstance(content,dict): raise LedgerError('creative provider must return a structured dict')
+        audience_language = str(target.get('publication_language') or target.get('language') or '').strip()
+        returned_language = str(content.get('publication_language') or '').strip()
+        if audience_language and returned_language and returned_language != audience_language:
+            raise LedgerError('one public creative = one audience language; provider language does not match target')
+        with_pub=content.copy()
+        with_pub.update({
+            'target':target,'brief':brief,'provider_key':provider.provider_key,'publication_authority':False,
+            'eligibility_state_id':eligibility_state_id,'monetization_configuration_state_id':monetization_configuration_state_id,
+            'audience_language': audience_language or None,
+            'one_public_creative_one_audience_language': True,
+            'uncertainty_strengthening_forbidden':True,
+        })
+        result=self.ledger.record_domain('CREATIVE_ARTIFACT','Creative / Localization Content Authority',with_pub,
+            natural_key=f"creative:{eligibility_state_id}:{monetization_configuration_state_id}:{provider.provider_key}:{target}",
+            subject_identity_id=self.ledger.subject_identity_for_state(eligibility_state_id),scope=target,record_state='DRAFTED',upstream_states=upstream)
+        self.ledger.bind_dependency(result.state_id,eligibility_state_id,'CREATIVE_ELIGIBILITY_GATE',invalidate,{'materiality':'eligibility or policy currentness change'})
+        if monetization_configuration_state_id:
+            self.ledger.bind_dependency(result.state_id,monetization_configuration_state_id,'CREATIVE_MONETIZATION_CONTEXT',invalidate,{'materiality':'offer/CTA/tracking/configuration change'})
+        return result
