@@ -111,6 +111,7 @@ class EvidenceSourceTrustService:
                        synthetic_only=isolated_test or _synthetic(declared_source),
                        production_eligible=False, automatic_replay_allowed=False,
                        independent_verification="NOT_AVAILABLE")
+        payload["raw_storage_ref"] = self.ledger._object_ref("sha256", actual_hash)
         return self.ledger.record_evidence_claim_atomic(
             claim_key=evidence_id, payload=payload, raw_bytes=raw_response,
             upstream_state_id=related_state_id)
