@@ -17,7 +17,7 @@ def parse_volume_bucket(text: str | None) -> dict[str, Any] | None:
     if not text:
         return None
     raw=str(text).strip().upper().replace(",","")
-    m=re.search(r"([0-9]+(?:\.[0-9]+)?)\s*([KMB])?\s*(\+)?",raw)
+    m=re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)\s*([KMB])?\s*(\+)?",raw)
     if not m:
         return {"raw":text,"parse_state":"UNRESOLVED"}
     n=float(m.group(1)); unit=m.group(2); plus=bool(m.group(3))
@@ -198,6 +198,28 @@ class SignalNormalizationService:
             semantics.append(
                 "Non-integer display values remain preserved in source_columns and are "
                 "not numerically strengthened"
+            )
+        elif (
+            connector=="google_trends_export"
+            and p.get("source_transport")=="LIVE_RSS"
+            and p.get("source_surface")=="google_trends_trending_now_rss"
+            and p.get("source_name")=="google_trends_live"
+            and p.get("connector")=="google_trends_export"
+        ):
+            volume=parse_volume_bucket(p.get("approx_traffic"))
+            if volume and volume.get("parse_state")=="DETERMINED":
+                metrics.append({
+                    "metric":"google_trends_export_search_volume",
+                    "value":volume,
+                    "unit":"source_bucket_semantics",
+                })
+            semantics.append(
+                "Google Trends LIVE_RSS approx_traffic is provider-reported market-scoped "
+                "approximate volume; '+' means lower bound, not exact count or global score"
+            )
+            semantics.append(
+                "Missing or malformed approx_traffic yields no asserted metric; "
+                "original raw value remains in SOURCE_RECORD"
             )
         elif connector=="google_trends_trending_now_export":
             cols=p.get("source_columns") or {}
