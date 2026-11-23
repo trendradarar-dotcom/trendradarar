@@ -6,6 +6,8 @@ A positive test may use an explicitly injected verifier, never production author
 from __future__ import annotations
 
 import hashlib
+import os
+import sys
 import json
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -55,6 +57,8 @@ class PublicationPerformanceService:
         if payload.get("verification_status") != "INDEPENDENTLY_VERIFIED":
             raise LedgerError("Independent publication verification missing")
         if test_only:
+            if os.environ.get('TREND_HUNTER_PERFORMANCE_TEST_ONLY') != '1' or 'pytest' not in sys.modules:
+                raise LedgerError('Isolated performance proof requires explicit pytest runtime')
             if not self._test_verifier or not self._test_verifier(pub):
                 raise LedgerError("Isolated test proof verifier rejected publication")
         else:
