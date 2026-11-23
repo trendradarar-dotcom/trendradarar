@@ -97,3 +97,21 @@ class PublisherCommandJournal:
         # Not an adapter: only writes a synthetic state. No HTTP or provider calls.
         return self.advance(command_id, expected_state_id, "DISPATCHED",
                             evidence, test_authority=TEST_AUTHORITY)
+
+    def inspect_recovery(self, command_id: str) -> dict:
+        """Read-only recovery after process/SQLite reopen; never dispatch."""
+        state_id, payload = self._latest(command_id)
+        with connect(self.ledger.db_path) as conn:
+            claim = conn.execute(
+                """SELECT 1 FROM artifact_identity
+                   WHERE kind='PUBLISHER_TEST_TRANSITION_CLAIM'
+                     AND natural_key=?""", (state_id,)
+            ).fetchone()
+        state = payload["state"]
+        blocked = bool(claim) or state in {
+            "DISPATCHED", "RECEIVED", "EXECUTING", "OUTCOME_UNKNOWN",
+            "RECONCILIATION_REQUIRED", "HELD",
+        }
+        return {"state_id": state_id, "state": state,
+                "unresolved_claim": bool(claim), "replay_blocked": blocked,
+                "synthetic_only": True}
