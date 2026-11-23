@@ -16,11 +16,11 @@ def _int_or_none(x: Any) -> int | None:
 def parse_volume_bucket(text: str | None) -> dict[str, Any] | None:
     if not text:
         return None
-    raw=str(text).strip().upper().replace(",","")
-    m=re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)\s*([KMB])?\s*(\+)?",raw)
+    raw=str(text).strip().upper()
+    m=re.fullmatch(r"((?:[0-9]+|[1-9][0-9]{0,2}(?:,[0-9]{3})+)(?:\.[0-9]+)?)\s*([KMB])?\s*(\+)?",raw)
     if not m:
         return {"raw":text,"parse_state":"UNRESOLVED"}
-    n=float(m.group(1)); unit=m.group(2); plus=bool(m.group(3))
+    n=float(m.group(1).replace(",","")); unit=m.group(2); plus=bool(m.group(3))
     mult={None:1,"K":1_000,"M":1_000_000,"B":1_000_000_000}[unit]
     val=int(n*mult)
     return {
