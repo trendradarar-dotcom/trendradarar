@@ -22,3 +22,37 @@ def test_youtube_search_is_discovery_not_popularity(monkeypatch):
     items=c.fetch()
     assert items[0].payload['search_result_not_native_popularity'] is True
     assert items[0].payload['statistics']['viewCount']=='123'
+
+def test_google_trends_bucket_strict_syntax():
+    from trend_hunter.signals import parse_volume_bucket
+    for raw in ("broken 100K+", "100K+ broken", "1,2,3", "100K++", "-100", "1e8", "NaN"):
+        assert parse_volume_bucket(raw)["parse_state"] == "UNRESOLVED"
+    assert parse_volume_bucket("2.5M+")["value"] == 2500000
+    assert parse_volume_bucket("2.5M+")["value_semantics"] == "LOWER_BOUND"
+    assert parse_volume_bucket("1,000+")["value"] == 1000
+    assert parse_volume_bucket(None) is None
+
+
+def test_google_trends_csv_normalization_unchanged(tmp_path: Path):
+    from trend_hunter.signals import SignalNormalizationService
+    p = tmp_path / "trends.csv"
+    p.write_text("Trends,Search volume,Started\\nalpha,100K+,2 hours ago\\n", encoding="utf-8")
+    item = GoogleTrendsExportConnector(str(p), region="US").fetch()[0]
+    class Ledger:
+        def get_state(self, state_id):
+            return {
+                "state_type": "SOURCE_RECORD",
+                "payload": {
+                    "connector": "google_trends_trending_now_export",
+                    "payload": item.payload,
+                },
+            }
+        def record_domain(self, *args, **kwargs):
+            return {"args": args, "kwargs": kwargs}
+    result = SignalNormalizationService(Ledger()).from_source("csv-source")
+    metrics = result["args"][2]["metrics"]
+    assert len(metrics) == 1
+    assert metrics[0]["metric"] == "google_trends_export_search_volume"
+    assert metrics[0]["value"]["raw"] == "100K+"
+    assert metrics[0]["value"]["value_semantics"] == "LOWER_BOUND"
+    assert result["kwargs"]["record_state"] == "OBSERVED"
