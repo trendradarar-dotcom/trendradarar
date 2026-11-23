@@ -63,6 +63,16 @@ def _youtube_refresh_token_store_from_runtime() -> object:
     raise LedgerError("Unsupported YouTube refresh-token store backend")
 
 
+class PublisherBridgeTestIn(BaseModel):
+    creative_state_id: str
+    authorization_state_id: str
+    channel_binding_state_id: str
+    platform: str
+    target: str
+    command_id: str
+    idempotency_key: str
+
+
 class HumanAuthorizationIn(BaseModel):
     recommendation_state_id: str
     execution_configuration_state_id: str | None = None
@@ -882,6 +892,23 @@ def create_app(db_path: str, *, auth_required: bool | None = None) -> FastAPI:
         except LedgerError as e:
             raise HTTPException(400, str(e))
 
+
+    @app.post("/api/_test/publisher-bridge/create", include_in_schema=False)
+    def publisher_bridge_test_create(req: PublisherBridgeTestIn, request: Request):
+        # Defense in depth: endpoint is unavailable unless running under pytest,
+        # with explicit opt-in and a loopback-only caller.
+        from .publisher_bridge import PublisherEngineBridge, assert_test_runtime
+        from .publisher_contract import ContractError
+        try:
+            assert_test_runtime()
+            if not _is_loopback_peer(request) or (request.url.hostname or "").lower() not in {"testserver", "localhost", "127.0.0.1", "::1"}:
+                raise ContractError("Local test caller required")
+            if auth_required:
+                raise ContractError("Test bridge unavailable in authenticated runtime")
+            sid, payload = PublisherEngineBridge(ledger).create(**req.model_dump())
+            return {"state_id": sid, "payload": payload, "synthetic_only": True}
+        except (LedgerError, ContractError) as exc:
+            raise HTTPException(403, str(exc))
 
     @app.post("/api/publication/recommend")
     def publication_recommend(req: RecommendationIn):
