@@ -111,21 +111,15 @@ class EvidenceSourceTrustService:
                        synthetic_only=isolated_test or _synthetic(declared_source),
                        production_eligible=False, automatic_replay_allowed=False,
                        independent_verification="NOT_AVAILABLE")
-        key = "evidence-source:" + evidence_id
-        payload["raw_storage_ref"] = self.ledger._object_ref("sha256", actual_hash)
-        previous = self.ledger.get_latest_state_by_natural_key(KIND, key)
-        if previous:
-            if previous["payload"] != payload:
-                raise LedgerError("Conflicting evidence identity; manual reconciliation required")
-            return previous
-        # Preserve exact bytes using the existing content-addressed object store.
-        self.ledger._store_bytes(raw_response, actual_hash)
-        ref = self.ledger.record_domain(
-            KIND, "Evidence Source Trust", payload, natural_key=key,
-            record_state=state,
-            upstream_states=([(related_state_id, "DECLARED_EVIDENCE_RELATION")]
-                             if related_state_id else []))
-        return self.ledger.get_state(ref.state_id)
+        return self.ledger.record_evidence_claim_atomic(
+            claim_key=evidence_id, payload=payload, raw_bytes=raw_response,
+            upstream_state_id=related_state_id)
+
+    def reconcile(self, *, evidence_id: str, decision: str,
+                  reason: str, reviewer_ref: str) -> dict:
+        return self.ledger.reconcile_evidence_claim(
+            claim_key=evidence_id, decision=decision,
+            reason=reason, reviewer_ref=reviewer_ref)
 
     def inspect(self, evidence_id: str) -> dict:
         state = self.ledger.get_latest_state_by_natural_key(
