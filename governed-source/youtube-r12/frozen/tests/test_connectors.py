@@ -36,7 +36,7 @@ def test_google_trends_bucket_strict_syntax():
 def test_google_trends_csv_normalization_unchanged(tmp_path: Path):
     from trend_hunter.signals import SignalNormalizationService
     p = tmp_path / "trends.csv"
-    p.write_text("Trends,Search volume,Started\\nalpha,100K+,2 hours ago\\n", encoding="utf-8")
+    p.write_text("Trends,Search volume,Started\nalpha,100K+,2 hours ago\n", encoding="utf-8")
     item = GoogleTrendsExportConnector(str(p), region="US").fetch()[0]
     class Ledger:
         def get_state(self, state_id):
