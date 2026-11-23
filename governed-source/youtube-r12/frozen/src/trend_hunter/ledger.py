@@ -165,6 +165,9 @@ class GovernanceLedger:
             raise LedgerError("Simulated interruption after raw evidence storage")
         canonical_hash = hash_bytes(payload_bytes)
         canonical_ref = self._store_bytes(payload_bytes, canonical_hash)
+        canonical_path = self.resolve_storage_ref(canonical_ref)
+        if hash_bytes(canonical_path.read_bytes()) != canonical_hash:
+            raise LedgerError("Stored canonical evidence failed read-back integrity")
         if upstream_state_id:
             self.get_state(upstream_state_id)
         with tx(self.db_path) as conn:
