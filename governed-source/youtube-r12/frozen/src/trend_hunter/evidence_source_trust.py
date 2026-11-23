@@ -112,15 +112,17 @@ class EvidenceSourceTrustService:
                        production_eligible=False, automatic_replay_allowed=False,
                        independent_verification="NOT_AVAILABLE")
         key = "evidence-source:" + evidence_id
+        payload["raw_storage_ref"] = self.ledger._object_ref("sha256", actual_hash)
         previous = self.ledger.get_latest_state_by_natural_key(KIND, key)
         if previous:
-            if previous["payload"] != payload or previous["raw_hash"] != actual_hash:
+            if previous["payload"] != payload:
                 raise LedgerError("Conflicting evidence identity; manual reconciliation required")
             return previous
-        # Raw bytes are retained in the ledger's content-addressed object store.
+        # Preserve exact bytes using the existing content-addressed object store.
+        self.ledger._store_bytes(raw_response, actual_hash)
         ref = self.ledger.record_domain(
             KIND, "Evidence Source Trust", payload, natural_key=key,
-            record_state=state, raw_bytes=raw_response,
+            record_state=state,
             upstream_states=([(related_state_id, "DECLARED_EVIDENCE_RELATION")]
                              if related_state_id else []))
         return self.ledger.get_state(ref.state_id)
