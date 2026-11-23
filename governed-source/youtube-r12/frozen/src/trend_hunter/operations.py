@@ -285,6 +285,7 @@ class OperationsService:
         *,
         notes: str = "",
         auth_context: dict[str, Any] | None = None,
+    ):
         if auth_context is not None:
             self._validate_authenticated_auth_context(auth_context, required_role="commercial_authorizer", required_scope="commercial:authorize")
         if decision not in {"AUTHORIZED", "REJECTED"}:
@@ -489,17 +490,17 @@ class OperationsService:
         auth_context: dict[str, Any] | None = None,
         verified_outcome_state_id: str | None = None,
     ):
-        # Historical PUBLICATION_EXECUTION semantics remain unchanged. Only an
-        # explicitly requested verified-outcome binding is subject to this gate.
+        # Opt-in only: legacy execution-attempt records preserve their meaning.
         if verified_outcome_state_id is not None:
             outcome = self.ledger.get_state(verified_outcome_state_id)
+            payload = outcome.get("payload") or {}
             if (outcome["state_type"] != "VERIFIED_PUBLICATION_OUTCOME"
-                    or outcome["payload"].get("verification_status") != "INDEPENDENTLY_VERIFIED"
-                    or outcome["payload"].get("synthetic_only") is not False):
+                    or payload.get("verification_status") != "INDEPENDENTLY_VERIFIED"
+                    or payload.get("synthetic_only") is not False):
                 raise LedgerError("Independently verified non-synthetic publication outcome required")
-            if (outcome["payload"].get("creative_state_id") != creative_state_id
-                    or outcome["payload"].get("authorization_state_id") != authorization_state_id
-                    or outcome["payload"].get("external_post_id") != external_result_ref):
+            if (payload.get("creative_state_id") != creative_state_id
+                    or payload.get("authorization_state_id") != authorization_state_id
+                    or payload.get("external_post_id") != external_result_ref):
                 raise LedgerError("Verified outcome does not match exact creative, approval and post")
         if auth_context is not None:
             self._validate_authenticated_auth_context(auth_context, required_role="publication_operator", required_scope="publication:execute")
