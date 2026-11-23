@@ -205,11 +205,9 @@ class GovernanceLedger:
                        VALUES(?,?,?,?,?,?,?)""",
                     (new_id("prov"), upstream_state_id, state_id,
                      "DECLARED_EVIDENCE_RELATION", 1, "{}", now))
-            conn.execute(
-                "UPDATE artifact_identity SET metadata_json=? WHERE id=?",
-                (json_dumps({"digest": digest, "raw_hash": raw_hash,
-                             "status": "COMPLETED", "state_id": state_id,
-                             "raw_storage_ref": self._object_ref("sha256", raw_hash)}), claim_id))
+            # artifact_identity is append-only. Completion is evidenced by the
+            # committed state, descriptor, domain record and provenance rows,
+            # not by mutating the original claim.
             if failpoint == "before_commit":
                 raise LedgerError("Simulated interruption before SQLite commit")
         return self.get_state(state_id)
