@@ -75,6 +75,171 @@ class GovernanceLedger:
             path.write_bytes(data)
         return self._object_ref("sha256", digest)
 
+
+    def record_evidence_claim_atomic(self, *, claim_key: str, payload: dict[str, Any],
+                                     raw_bytes: bytes, upstream_state_id: str | None = None,
+                                     failpoint: str | None = None) -> dict[str, Any]:
+        """Fail-closed two-phase evidence claim; SQLite finalization is one transaction.
+
+        Phase 1 is a durable, uniquely keyed claim with immutable digest metadata.
+        Raw object storage is outside SQLite. Phase 2 atomically inserts descriptor,
+        artifact state, domain record and provenance, and marks claim complete.
+        A crash leaves a recoverable claim, never an implicitly successful record.
+        """
+        import hashlib
+        import tempfile
+        if not claim_key or not isinstance(raw_bytes, bytes) or not raw_bytes:
+            raise LedgerError("Evidence claim key and raw bytes required")
+        raw_hash = hashlib.sha256(raw_bytes).hexdigest()
+        payload_bytes = canonical_json_bytes(payload)
+        digest = hash_bytes(payload_bytes)
+        if payload.get("claimed_sha256") != raw_hash:
+            raise LedgerError("Evidence raw hash mismatch")
+        claim_kind = "EVIDENCE_SOURCE_ATOMIC_CLAIM"
+        record_kind = "EVIDENCE_SOURCE_TRUST"
+        natural_key = "evidence-source:" + claim_key
+        with tx(self.db_path) as conn:
+            existing = conn.execute(
+                "SELECT id,metadata_json FROM artifact_identity WHERE kind=? AND natural_key=?",
+                (claim_kind, natural_key)).fetchone()
+            if existing:
+                old = json.loads(existing["metadata_json"])
+                if old.get("digest") != digest or old.get("raw_hash") != raw_hash:
+                    conn.execute(
+                        "INSERT INTO artifact_identity(id,kind,natural_key,metadata_json,created_at) VALUES(?,?,?,?,?)",
+                        (new_id("aid"), "EVIDENCE_SOURCE_CONFLICT", new_id("conflict"),
+                         json_dumps({"claim_key": natural_key, "incoming_digest": digest,
+                                     "incoming_raw_hash": raw_hash, "reason": "IDENTITY_CONFLICT"}),
+                         utcnow()))
+                    # Raise after commit so the conflict audit is durable.
+                    conflict = True
+                else:
+                    conflict = False
+                claim_id = existing["id"]
+                fresh = False
+            else:
+                claim_id = new_id("aid")
+                conn.execute(
+                    "INSERT INTO artifact_identity(id,kind,natural_key,metadata_json,created_at) VALUES(?,?,?,?,?)",
+                    (claim_id, claim_kind, natural_key,
+                     json_dumps({"digest": digest, "raw_hash": raw_hash,
+                                 "status": "CLAIMED", "raw_storage_ref": self._object_ref("sha256", raw_hash)}),
+                     utcnow()))
+                fresh, conflict = True, False
+        if conflict:
+            raise LedgerError("Conflicting evidence identity; manual reconciliation required")
+        if not fresh:
+            with connect(self.db_path) as conn:
+                row = conn.execute(
+                    """SELECT s.id FROM artifact_state s JOIN artifact_identity i
+                       ON i.id=s.identity_id WHERE i.kind=? AND i.natural_key=?
+                       ORDER BY s.version DESC LIMIT 1""",
+                    (record_kind, natural_key)).fetchone()
+            if row:
+                previous = self.get_state(row["id"])
+                if previous["payload"] != payload:
+                    raise LedgerError("Existing evidence payload mismatch")
+                return previous
+            raise LedgerError("Interrupted evidence claim; manual reconciliation required")
+        if failpoint == "after_claim":
+            raise LedgerError("Simulated interruption after durable claim")
+        # A content-addressed object may be orphaned by a crash. The claim
+        # retains its hash/ref for manual inspection; no automatic replay.
+        sub = Path(self.storage_dir) / raw_hash[:2]
+        sub.mkdir(parents=True, exist_ok=True)
+        destination = sub / raw_hash
+        if not destination.exists():
+            fd, temp_path = tempfile.mkstemp(prefix=".evidence-", dir=str(sub))
+            try:
+                with os.fdopen(fd, "wb") as f:
+                    f.write(raw_bytes)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(temp_path, destination)
+            finally:
+                if os.path.exists(temp_path):
+                    os.unlink(temp_path)
+        if hashlib.sha256(destination.read_bytes()).hexdigest() != raw_hash:
+            raise LedgerError("Stored raw evidence failed read-back integrity")
+        if failpoint == "after_raw":
+            raise LedgerError("Simulated interruption after raw evidence storage")
+        canonical_hash = hash_bytes(payload_bytes)
+        canonical_ref = self._store_bytes(payload_bytes, canonical_hash)
+        if upstream_state_id:
+            self.get_state(upstream_state_id)
+        with tx(self.db_path) as conn:
+            # Assert claim still corresponds to the same immutable request.
+            claim = conn.execute("SELECT metadata_json FROM artifact_identity WHERE id=?",
+                                 (claim_id,)).fetchone()
+            if not claim or json.loads(claim["metadata_json"]).get("digest") != digest:
+                raise LedgerError("Evidence claim changed")
+            identity_id, state_id, descriptor_id = new_id("aid"), new_id("ast"), new_id("cd")
+            now = utcnow()
+            conn.execute(
+                "INSERT INTO artifact_identity(id,kind,natural_key,metadata_json,created_at) VALUES(?,?,?,?,?)",
+                (identity_id, record_kind, natural_key, json_dumps({}), now))
+            conn.execute(
+                """INSERT INTO content_descriptor(
+                   id,raw_hash_algorithm,raw_hash,raw_size_bytes,raw_storage_ref,
+                   canonical_hash_algorithm,canonical_hash,canonicalization_profile_id,
+                   canonical_storage_ref,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                (descriptor_id, "sha256", raw_hash, len(raw_bytes),
+                 self._object_ref("sha256", raw_hash), "sha256", canonical_hash,
+                 None, canonical_ref, now))
+            conn.execute(
+                """INSERT INTO artifact_state(
+                   id,identity_id,version,state_type,content_descriptor_id,payload_json,status,
+                   recorded_at,committed_at) VALUES(?,?,?,?,?,?,?,?,?)""",
+                (state_id, identity_id, 1, record_kind, descriptor_id,
+                 json_dumps(payload), "COMMITTED", now, now))
+            conn.execute(
+                """INSERT INTO domain_record(
+                   artifact_state_id,stage,owner_authority,subject_identity_id,scope_json,record_state)
+                   VALUES(?,?,?,?,?,?)""",
+                (state_id, record_kind, "Evidence Source Trust", None, "{}",
+                 payload.get("state", "SOURCE_UNVERIFIED")))
+            if upstream_state_id:
+                conn.execute(
+                    """INSERT INTO provenance_edge(
+                       id,from_state_id,to_state_id,edge_type,materially_consumed,metadata_json,created_at)
+                       VALUES(?,?,?,?,?,?,?)""",
+                    (new_id("prov"), upstream_state_id, state_id,
+                     "DECLARED_EVIDENCE_RELATION", 1, "{}", now))
+            conn.execute(
+                "UPDATE artifact_identity SET metadata_json=? WHERE id=?",
+                (json_dumps({"digest": digest, "raw_hash": raw_hash,
+                             "status": "COMPLETED", "state_id": state_id,
+                             "raw_storage_ref": self._object_ref("sha256", raw_hash)}), claim_id))
+            if failpoint == "before_commit":
+                raise LedgerError("Simulated interruption before SQLite commit")
+        return self.get_state(state_id)
+
+    def reconcile_evidence_claim(self, *, claim_key: str, decision: str,
+                                 reason: str, reviewer_ref: str) -> dict[str, Any]:
+        """Append an immutable manual reconciliation decision without trust promotion."""
+        if decision not in {"KEEP_HOLD", "REJECT_CONFLICT", "MARK_FOR_REVIEW"}:
+            raise LedgerError("Reconciliation cannot approve production trust")
+        if not all(isinstance(v, str) and v.strip() for v in
+                   (claim_key, reason, reviewer_ref)):
+            raise LedgerError("Reconciliation requires claim, reason and reviewer")
+        natural_key = "evidence-source:" + claim_key
+        with tx(self.db_path) as conn:
+            claim = conn.execute(
+                "SELECT metadata_json FROM artifact_identity WHERE kind=? AND natural_key=?",
+                ("EVIDENCE_SOURCE_ATOMIC_CLAIM", natural_key)).fetchone()
+            if not claim:
+                raise LedgerError("Evidence claim not found")
+            payload = {"claim_key": natural_key, "decision": decision,
+                       "reason": reason, "reviewer_ref": reviewer_ref,
+                       "claim_metadata": json.loads(claim["metadata_json"]),
+                       "production_eligible": False, "automatic_replay_allowed": False}
+            audit_id = new_id("aid")
+            conn.execute(
+                "INSERT INTO artifact_identity(id,kind,natural_key,metadata_json,created_at) VALUES(?,?,?,?,?)",
+                (audit_id, "EVIDENCE_RECONCILIATION_DECISION", new_id("decision"),
+                 json_dumps(payload), utcnow()))
+        return {"audit_id": audit_id, **payload}
+
     def create_canonicalization_profile(self, profile_key: str, version: int, rules: dict[str, Any]) -> str:
         pid = new_id("canon")
         with tx(self.db_path) as conn:
