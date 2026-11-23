@@ -46,3 +46,22 @@ def test_wrapped_synthetic_lineage_never_production_and_no_downstream(tmp_path,m
         stages={r["stage"] for r in conn.execute("SELECT stage FROM domain_record")}
     assert not stages.intersection({"PUBLICATION_PERFORMANCE_MEASUREMENT","TREND_MEASUREMENT",
         "REALIZED_ECONOMIC_OUTCOME","PERFORMANCE_OBSERVATION","LEARNING_UPDATE_PROPOSAL"})
+
+def test_claim_reconciliation_does_not_write_downstream(tmp_path):
+    db = str(tmp_path / "reconciliation.sqlite")
+    init_db(db)
+    ledger = GovernanceLedger(db)
+    with connect(db) as conn:
+        before = {row["stage"] for row in conn.execute("SELECT stage FROM domain_record")}
+    # No claim can be reconciled without a durable original claim.
+    with pytest.raises(LedgerError, match="not found"):
+        ledger.reconcile_evidence_claim(
+            claim_key="missing", decision="KEEP_HOLD",
+            reason="no claim", reviewer_ref="reviewer")
+    with pytest.raises(LedgerError, match="cannot approve"):
+        ledger.reconcile_evidence_claim(
+            claim_key="missing", decision="APPROVE_PRODUCTION",
+            reason="invalid", reviewer_ref="reviewer")
+    with connect(db) as conn:
+        after = {row["stage"] for row in conn.execute("SELECT stage FROM domain_record")}
+    assert before == after
