@@ -1,4 +1,8 @@
 import pytest
+
+@pytest.fixture(autouse=True)
+def _isolated_runtime(monkeypatch):
+    monkeypatch.setenv('TREND_HUNTER_PERFORMANCE_TEST_ONLY', '1')
 from trend_hunter.db import init_db, connect
 from trend_hunter.ledger import GovernanceLedger, LedgerError
 from trend_hunter.publication_performance import PublicationPerformanceService
